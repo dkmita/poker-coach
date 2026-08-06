@@ -304,8 +304,22 @@ const netClass = (n) => n > 0 ? "pos-net" : n < 0 ? "neg-net" : "zero-net";
 // screen names -- the one string on the page that must not be trusted as HTML.
 const esc = (s) => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
+// Local time, not the site's UTC. What matters is when you were at the table,
+// and one evening's session straddles two UTC dates.
+const when = (iso) => new Date(iso);
+const dayKey = (d) => d.toDateString();
+const dayLabel = (d) => d.toLocaleDateString(undefined,
+  { weekday: "long", month: "short", day: "numeric" });
+const clock = (d) => d.toLocaleTimeString(undefined,
+  { hour: "numeric", minute: "2-digit" });
+// Carried across pages: "load more" appends, so the header must not repeat for
+// a day already open above.
+let lastDay = null;
+
 async function loadList() {
-  if (listMode !== "hands") { $("#rows").innerHTML = ""; offset = 0; listMode = "hands"; }
+  if (listMode !== "hands") {
+    $("#rows").innerHTML = ""; offset = 0; listMode = "hands"; lastDay = null;
+  }
   $("#filters").style.display = "flex";
   const r = await fetch(`/api/hands?offset=${offset}&limit=60&filter=${filterKind}`)
     .then(r => r.json());
@@ -319,6 +333,19 @@ async function loadList() {
   }
   total = r.total;
   for (const row of r.rows) {
+    // A day heading rather than a date on every row: the list is chronological,
+    // so the date only changes a couple of times, and 320px of sidebar has no
+    // room to repeat it 58 times.
+    if (row.played_at) {
+      const d = when(row.played_at);
+      if (dayKey(d) !== lastDay) {
+        lastDay = dayKey(d);
+        const head = document.createElement("div");
+        head.className = "group";
+        head.textContent = dayLabel(d);
+        $("#rows").appendChild(head);
+      }
+    }
     const el = document.createElement("div");
     el.className = "row hand";
     el.dataset.file = row.file;
@@ -329,7 +356,8 @@ async function loadList() {
       el.innerHTML = `
         <div class="pos">${row.position}</div>
         <div>${hole(row.hole_cards)}
-          <div class="meta">${row.hero_street_reached} · ${row.eff_stack_bb}bb</div></div>
+          <div class="meta">${row.played_at ? clock(when(row.played_at)) + " · " : ""}${
+            row.hero_street_reached} · ${row.eff_stack_bb}bb</div></div>
         <div class="flags">
           ${off.length ? `<div class="flag" title="${off.join(" · ")}">${
             off.length > 1 ? `${off.length} preflop` : "preflop"}</div>` : ""}${

@@ -91,6 +91,15 @@ trivially correct, so the pipeline is a **funnel**: deterministic filters first,
 survivors. Preserve that shape — a change that sends every hand to an agent is a regression even
 if its output looks better.
 
+**Depth over coverage.** The funnel is not only the cheap shape, it is the one that matches how
+players are told to study: *"better to dissect 3 hands in full than to skim 30 with half your
+attention"*, with a target of roughly **10–15% of hands played** getting real review
+([CheckReplay](https://blog.checkreplay.com/poker-hand-review/),
+[SplitSuit](https://www.splitsuit.com/review-own-poker-hands-and-practice)). So the funnel's output
+volume is a product decision, not just a budget one, and 10–15% is the number to tune the detectors
+and the "interesting" filter against. A run that surfaces 60% of a session is broken even if every
+flag is defensible — it is back to skimming 30.
+
 Three stages, each independently runnable so you can re-run one without redoing the others:
 
 1. **Ingest** — read site hand histories, emit one `.phh` file per hand, index it in SQLite.

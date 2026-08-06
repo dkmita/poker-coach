@@ -124,6 +124,11 @@ class Archive:
                 {
                     "file": name,
                     "site_hand_id": h["site_hand_id"],
+                    # UTC, as the site records it. The client renders it in local
+                    # time -- what matters is when *you* were at the table, and a
+                    # session that reads as one evening locally is spread across
+                    # two dates in UTC.
+                    "played_at": h["played_at"],
                     "position": h["hero"]["position"],
                     "hole_cards": h["hero"]["hole_cards"],
                     "hero_street_reached": r["hero_street_reached"],
