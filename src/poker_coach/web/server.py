@@ -73,32 +73,35 @@ class Archive:
         Built per page rather than for the whole archive at startup: a 2000-hand
         corpus would cost a few seconds of replay to show fifty rows.
         """
-        names = list(self.files)[offset : offset + limit]
         rows = []
-        for name in names:
-            try:
-                hh = load(self.files[name])
-                idx = project_index(hh, phh_path=name, phh_sha256="")
-                hero = hero_index(hh)
-                cards = handview._hole_from_actions(hh, hero)
-                # Hero's own street, not the hand's: hero can fold preflop while
-                # the others run it to the river, and listing that as "river"
-                # badly overstates how often you saw a flop.
-                view = handview.build(hh)
-                rows.append(
-                    {
-                        "file": name,
-                        "site_hand_id": idx.site_hand_id,
-                        "position": idx.hero_position.value,
-                        "hole_cards": cards,
-                        "hero_street_reached": view["result"]["hero_street_reached"],
-                        "street_reached": idx.street_reached.value,
-                        "hero_net_bb": round(idx.hero_net / idx.bb, 2),
-                        "eff_stack_bb": round(idx.eff_stack_bb),
-                    }
-                )
-            except ReplayError as exc:
-                rows.append({"file": name, "error": str(exc)})
+        for name in list(self.files)[offset : offset + limit]:
+            # The same cached view the detail pane uses. Building it here costs a
+            # replay per row but keeps one source of truth, and it means the row
+            # can carry the verdicts -- which is the point: a mistake you have to
+            # open every hand to find is a mistake you will not find.
+            view = self._build(name)
+            if view is None or "error" in view:
+                rows.append({"file": name, "error": (view or {}).get("error", "unknown")})
+                continue
+            h, r = view["hand"], view["result"]
+            off = [
+                d["verdict"]["label"]
+                for d in view["hero_decisions"]
+                if d["street"] == "preflop" and (d.get("verdict") or {}).get("tone") == "bad"
+            ]
+            rows.append(
+                {
+                    "file": name,
+                    "site_hand_id": h["site_hand_id"],
+                    "position": h["hero"]["position"],
+                    "hole_cards": h["hero"]["hole_cards"],
+                    "hero_street_reached": r["hero_street_reached"],
+                    "street_reached": r["street_reached"],
+                    "hero_net_bb": r["hero_net_bb"],
+                    "eff_stack_bb": round(h["hero"]["eff_stack_bb"]),
+                    "preflop_off_chart": off,
+                }
+            )
         return {"total": len(self.files), "offset": offset, "rows": rows}
 
 

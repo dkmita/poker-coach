@@ -94,3 +94,19 @@ def test_path_traversal_rejected(server):
     with pytest.raises(HTTPError) as e:
         urlopen(server + "/api/hands/..%2f..%2fetc%2fpasswd")
     assert e.value.code == 400
+
+
+def test_list_row_flags_off_chart_preflop(server):
+    """A mistake you must open every hand to find is a mistake you won't find."""
+    d = get(server, "/api/hands")
+    row = d["rows"][0]
+    assert "preflop_off_chart" in row
+    # Hero folds AdJs in the big blind facing a UTG raise; the fixture chart
+    # calls it 80% of the time, so the fold is off chart.
+    assert row["preflop_off_chart"] == ["off chart — calls here"]
+
+
+def test_clean_hands_carry_an_empty_flag_list(server):
+    """Present-and-empty, so the client can rely on the key existing."""
+    row = get(server, "/api/hands")["rows"][0]
+    assert isinstance(row["preflop_off_chart"], list)

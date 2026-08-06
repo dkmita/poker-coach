@@ -70,6 +70,11 @@
   .row .pos { font-weight: 700; color: var(--hero); font-size: 12px; }
   .row .meta { color: var(--dim); font-size: 12px; }
   .row .net { font-variant-numeric: tabular-nums; font-size: 12px; }
+  .row .flag {
+    display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 999px;
+    font-size: 10px; font-weight: 650; color: var(--bad);
+    background: rgba(224,108,117,.12); border: 1px solid rgba(224,108,117,.35);
+  }
   .pos-net { color: var(--good); } .neg-net { color: var(--bad); } .zero-net { color: var(--dim); }
   .group {
     padding: 12px 16px 6px; font-size: 10px; font-weight: 700; color: var(--dim);
@@ -211,10 +216,13 @@ async function loadList() {
     if (row.error) {
       el.innerHTML = `<div class="pos">!</div><div class="meta">${row.file}</div><div></div>`;
     } else {
+      const off = row.preflop_off_chart || [];
       el.innerHTML = `
         <div class="pos">${row.position}</div>
         <div>${hole(row.hole_cards)}
-          <div class="meta">${row.hero_street_reached} · ${row.eff_stack_bb}bb</div></div>
+          <div class="meta">${row.hero_street_reached} · ${row.eff_stack_bb}bb</div>
+          ${off.length ? `<div class="flag" title="${off.join("; ")}">preflop off chart${
+            off.length > 1 ? ` ×${off.length}` : ""}</div>` : ""}</div>
         <div class="net ${netClass(row.hero_net_bb)}">${row.hero_net_bb > 0 ? "+" : ""}${row.hero_net_bb}</div>`;
     }
     el.onclick = () => open(row.file, el);
