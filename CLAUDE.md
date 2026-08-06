@@ -4,9 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-**Nothing is implemented yet.** The repo holds `README.md` and this file. Everything below is the
-agreed design — treat it as the spec to build against, and update this file as code lands so it
-describes reality rather than intent.
+Early. What exists: `models.py` (shared types) and `corpus/schema.sql` (verified against SQLite
+3.51 — 9 tables, 3 views). Everything else below is the agreed design, not shipped code. Update
+this file as code lands so it describes reality rather than intent.
+
+No parser, no pipeline stages, no `pyproject.toml` yet. `pokerkit` is a planned dependency
+(requires Python ≥ 3.11) and is not installed.
 
 ## What this is
 
@@ -27,43 +30,83 @@ if its output looks better.
 
 Four stages, each independently runnable so you can re-run one without redoing the others:
 
-1. **Ingest** — watch the hand-history folder, parse to one canonical hand model, persist. Idempotent:
-   re-ingesting a file must not duplicate hands (dedupe on the site's hand ID).
-2. **Triage** — preflop chart lookup + equity/EV math. Emits `Candidate` records for hands worth a
-   closer look. No LLM calls in this stage, ever; it must stay fast and free.
-3. **Analyze** — Agent SDK agent per candidate, with custom tools for equity, ranges, solver
-   lookup, and corpus search. Emits `Finding` records carrying an $EV-lost estimate.
+1. **Ingest** — read site hand histories, emit one `.phh` file per hand, index it in SQLite.
+   Idempotent: re-reading a file must not create a second row (dedupe on `(site, site_hand_id)`).
+2. **Triage** — replay each hand with pokerkit, run chart lookups and equity/EV math over hero's
+   decisions, write `flagged_decisions`. **No LLM calls in this stage, ever** — it must stay fast
+   and free, because it is the thing that protects stage 3's budget.
+3. **Analyze** — Agent SDK agent per flagged decision, with custom tools for equity, ranges, solver
+   lookup, and corpus search. Emits `findings` carrying an $EV-lost estimate.
 4. **Synthesize** — cluster findings into named leaks across *all* sessions, rank by cumulative
-   $EV lost, write the report.
+   $EV lost, write the report. Reads `findings` from SQL; never opens a `.phh` file.
+
+### Where data lives
+
+Three layers, split on **mutability**. This is the decision most likely to be misread, so it is
+worth stating flatly:
+
+| Layer | Owns | Why |
+|---|---|---|
+| `.phh` files | hands | Write-once and immutable, which is what files are good at. Open standard (PHH, TOML-based), human-readable, diffable, testable against the public PHH dataset. |
+| `pokerkit` | replay | Pot sizes, side pots, legal actions, stack tracking, hand evaluation. **Do not reimplement any of this.** |
+| SQLite | index + pipeline state | Findings get superseded, leak status moves `open → fixed`, flagged decisions get re-queued, "pending work, most expensive first" is an ordered query. Files are bad at that. |
+
+The `hands` table indexes only what you **filter** on and points at `phh_path`. Detail stays in the
+`.phh` file. Add a column when a query proves slow — do not mirror by default, because a SQL mirror
+of the action list is duplicated state that can drift from the archive it copies.
+
+Replay cost is once-per-hand-ever (ingest and triage), so it is not a factor in design decisions.
+The one exception is backfilling after a detector change, which rescans history; that is an
+annoyance, not a constraint.
 
 ### Invariants
 
-- **$EV lost is the ranking currency.** Every `Finding` carries one. Reports rank by money, never
-  by error count.
-- **The corpus is the product.** A leak is a cross-session pattern, so findings and hands persist
-  in SQLite and synthesis reads the whole history, not just tonight's session.
-- **Parsers sit behind a `SiteParser` interface.** The target site isn't settled. Nothing outside
-  `ingest/parsers/` may know which site a hand came from.
-- **Solver access sits behind a `SolutionProvider` interface**, cache-first. The rest of the
-  pipeline must degrade gracefully when a provider is unavailable — a broken scraper cannot break
-  the nightly run.
+- **$EV lost is the ranking currency.** Every finding carries one. Reports rank by money, never by
+  error count.
+- **A flagged decision is keyed on the decision, not the detector.** Two rules firing on one call
+  must produce one judgement; per-detector rows would double-count that money in leak totals and
+  inflate exactly the leaks whose detectors overlap most. Detectors live in a child table.
+- **Parsers emit PHH.** The `SiteParser` contract is "produces a valid `.phh` file", not "produces
+  our dataclasses". Nothing outside `ingest/parsers/` knows which site a hand came from.
+- **Solver access sits behind a `SolutionProvider` interface**, cache-first, keyed on the abstract
+  spot rather than provider internals. A broken scraper cannot break the nightly run.
+- **Watch `v_detector_precision`.** It is the main defense against the funnel silently degrading. A
+  detector whose flags rarely come back `mistake` is burning agent budget.
+
+### PHH gaps to work around
+
+The spec does not cover everything a cash-game study tool needs. These are known, not surprises:
+
+- **No rake field.** The paper's position is that rake is reconstructed from `finishing_stacks`. Do
+  that at ingest and store it — rake is what makes marginal opens unprofitable, so a model that
+  can't express it will rate the loosest opens as fine.
+- **No site hand ID.** PHH has `hand` (a counter), not a site-scoped unique string. Carried as
+  user-defined fields `_pc_site` / `_pc_site_hand_id` (see `models.py`).
+- **`cc` collapses check/call and `cbr` collapses bet/raise.** Recoverable from `to_call` during
+  replay, and resolved into `ActionType`. Never treat them as interchangeable — checking and
+  calling are different decisions and a detector keyed on the wrong one measures nothing.
+- **Positions are implicit** in player index + `blinds_or_straddles`. Derived once by
+  `models.position_of()`. Heads up is the trap: the button posts the small blind, so index 0 is BTN.
 
 ### Intended layout
 
 ```
+archive/                 # the .phh corpus: system of record, one file per hand
 src/poker_coach/
-├── models.py            # canonical Hand / Street / Action / Candidate / Finding
+├── models.py            # DONE: shared types; no Hand type -- that's the .phh file
 ├── config.py
 ├── ingest/
 │   ├── watcher.py
-│   └── parsers/         # base.py defines SiteParser; one module per site format
+│   ├── parsers/         # base.py defines SiteParser (emits PHH); one per site
+│   └── indexer.py       # replay a .phh, project a HandIndex row
 ├── corpus/
-│   ├── schema.sql
-│   └── store.py         # SQLite: hands, actions, candidates, findings, leaks, runs
+│   ├── schema.sql       # DONE
+│   └── store.py         # SQLite access
+├── replay.py            # pokerkit wrapper: .phh -> Decision stream
 ├── triage/
 │   ├── ranges.py        # solver-derived charts as data, not code
 │   ├── equity.py        # equity/EV primitives
-│   └── rules.py         # candidate detection
+│   └── detectors.py     # emit flagged_decisions
 ├── agent/
 │   ├── tools.py         # @tool defs + create_sdk_mcp_server
 │   ├── analyst.py       # stage 3

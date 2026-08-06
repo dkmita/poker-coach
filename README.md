@@ -53,11 +53,20 @@ Two things are load-bearing:
 
 ## Stack
 
-- **Python** — where the poker ecosystem lives (equity evaluation, dataframes, Playwright)
+- **Python** (≥ 3.11) — where the poker ecosystem lives
+- **[PHH](https://phh.readthedocs.io/)** as the hand archive: an open, TOML-based hand-history
+  standard ([paper](https://arxiv.org/abs/2312.11753)). One `.phh` file per hand is the system of
+  record — immutable, human-readable, diffable, and testable against the public PHH dataset.
+  Parsers convert site histories *into* PHH, so the ingest boundary is a published standard rather
+  than a shape only our tests know about.
+- **[pokerkit](https://github.com/uoftcprg/pokerkit)** as the replay engine: pot sizes, side pots,
+  legal actions, stack tracking, hand evaluation. We don't reimplement game logic.
+- **SQLite** for an index over the archive plus all mutable pipeline state — flagged decisions,
+  findings, leak history, the solver cache, run provenance. Hands stay in PHH; the database holds
+  what changes.
 - **[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)** (`claude-agent-sdk`) for the
   analysis and synthesis stages: built-in file/search tools plus custom in-process MCP tools for
   equity, ranges, solver lookups, and corpus queries
-- **SQLite** for the hand corpus, findings, and the solver-solution cache
 
 ## Solver lookups
 
@@ -72,6 +81,6 @@ hit costs nothing and the provider is swappable:
 
 ## Status
 
-Pre-implementation. The repository currently holds this README and `CLAUDE.md`; the pipeline
-described above is the design, not shipped code. See `CLAUDE.md` for the intended layout,
-conventions, and the decisions already settled.
+Early. The data model (`src/poker_coach/models.py`) and corpus schema
+(`src/poker_coach/corpus/schema.sql`) are settled; the pipeline stages are not written yet. See
+`CLAUDE.md` for the layout, conventions, and the reasoning behind each decision.
