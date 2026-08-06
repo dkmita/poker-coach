@@ -111,7 +111,12 @@ def big_blind(hh: HandHistory) -> Cents:
     blinds = hh.blinds_or_straddles or []
     if len(blinds) < 2:
         raise ReplayError("blinds_or_straddles must have at least two entries")
-    return int(blinds[1])
+    # pokerkit swaps the two entries heads-up, so a two-handed array is
+    # [big, small] while three or more is [small, big, ...]. Reading index 1
+    # unconditionally halves the big blind heads-up, which then doubles every
+    # bb-denominated figure downstream -- a $10 stack at 5c/10c rendering as
+    # "198bb effective" is how this surfaced.
+    return int(blinds[0] if len(blinds) == 2 else blinds[1])
 
 
 def _card(card: object) -> str:

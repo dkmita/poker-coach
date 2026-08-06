@@ -76,6 +76,9 @@ def build(
     """
     bb = big_blind(hh)
     hero = hero_index(hh)
+    blinds_raw = hh.blinds_or_straddles or []
+    # Mirror of the heads-up swap in replay.big_blind: two-handed is [big, small].
+    sb = int(blinds_raw[1] if len(blinds_raw) == 2 else (blinds_raw[0] if blinds_raw else 0))
     index = project_index(hh, phh_path="", phh_sha256="", hand_id=hand_id)
     players = len(hh.starting_stacks)
     blinds = hh.blinds_or_straddles or []
@@ -107,10 +110,10 @@ def build(
             "site_hand_id": index.site_hand_id,
             "played_at": index.played_at.isoformat(),
             "stakes": {
-                "sb_cents": int(blinds[0]) if blinds else 0,
+                "sb_cents": sb,
                 "bb_cents": bb,
                 "currency": index.currency,
-                "label": stakes_label(int(blinds[0]) if blinds else 0, bb),
+                "label": stakes_label(sb, bb),
             },
             "table": {"players_dealt": players},
             "hero": {
