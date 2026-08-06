@@ -408,8 +408,12 @@ async function openChart(spot, el) {
   const cellsHtml = RANKS13.flatMap((hi, i) =>
     RANKS13.map((lo, j) => cellHtml(i === j ? hi + lo : (j > i ? hi + lo + "s" : lo + hi + "o")))
   ).join("");
+  const ref = spot.startsWith("9max_");
+  const bare = spot.replace(/^9max_/, "");
   $("#detail").innerHTML = `
-    <h2>${spot.split("_")[0]} <span class="sub" style="font-size:14px">${spot.replace(/_/g," ")}</span></h2>
+    <h2>${bare.split("_")[0]} <span class="sub" style="font-size:14px">${
+      bare.replace(/_/g, " ")}</span>${
+      ref ? ' <span class="verdict ok" style="margin-left:8px">9-handed only</span>' : ""}</h2>
     <h3>Range</h3>
     <div class="rangegrid">${cellsHtml}</div>
     <div class="legend">${[...seen].map(a =>
@@ -428,11 +432,16 @@ async function openChart(spot, el) {
   $("#detail").scrollTop = 0;
 }
 
+function setTab(name) {
+  document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x.dataset.tab === name));
+}
+
 document.querySelectorAll(".tab").forEach(t => {
   t.onclick = () => {
-    document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x === t));
+    setTab(t.dataset.tab);
     active = null;
     $("#detail").innerHTML = `<div class="empty">Select a ${t.dataset.tab === "hands" ? "hand" : "chart"}</div>`;
+    history.replaceState(null, "", "#");
     if (t.dataset.tab === "charts") loadCharts();
     else { $("#rows").innerHTML = ""; offset = 0; loadList(); }
   };
@@ -440,20 +449,39 @@ document.querySelectorAll(".tab").forEach(t => {
 
 $("#more").onclick = loadList;
 
-// Deep link: #hand_00002.phh opens that hand directly, even if it is not on the
-// first page of the list.
-(async () => {
+// One router for both entry points. The verdict badges link to #chart:..., and
+// clicking one only changes the hash -- so routing has to run on `hashchange`
+// too, not just at load. Handling it once at startup meant in-app links updated
+// the URL and did nothing.
+async function route() {
   const want = decodeURIComponent(location.hash.slice(1));
+
   if (want.startsWith("chart:")) {
-    document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x.dataset.tab === "charts"));
-    await loadCharts();
     const spot = want.slice(6);
-    openChart(spot, $(`.row[data-spot="${CSS.escape(spot)}"]`));
+    setTab("charts");
+    // Rebuild the list only when we're not already showing it, so following a
+    // link from a hand doesn't flash and lose scroll position.
+    if (!$(`.row[data-spot]`)) await loadCharts();
+    // A 9-handed-only chart is hidden behind the toggle; a link straight to one
+    // has to reveal it or it lands on a chart with no row to highlight.
+    if (spot.startsWith("9max_") && !showRef) { showRef = true; await loadCharts(); }
+    const row = $(`.row[data-spot="${CSS.escape(spot)}"]`);
+    if (row) row.scrollIntoView({ block: "nearest" });
+    await openChart(spot, row);
     return;
   }
-  await loadList();
-  if (want) open(want, $(`.row[data-file="${CSS.escape(want)}"]`));
-})();
+
+  setTab("hands");
+  if (!$(`.row[data-file]`)) await loadList();
+  if (want) {
+    const row = $(`.row[data-file="${CSS.escape(want)}"]`);
+    if (row) row.scrollIntoView({ block: "nearest" });
+    await open(want, row);
+  }
+}
+
+window.addEventListener("hashchange", route);
+route();
 </script>
 </body>
 </html>
