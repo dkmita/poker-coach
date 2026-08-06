@@ -32,7 +32,7 @@ from typing import Any
 
 from pokerkit.notation import HandHistory
 
-from .models import ActionType, Cents, Street
+from .models import PHH_SOURCE_TEXT, ActionType, Cents, Street
 from .solvers.base import SolutionProvider
 from .replay import (
     _PLAYER_ACTION,
@@ -117,6 +117,12 @@ def build(
                 "label": stakes_label(sb, bb),
             },
             "table": {"players_dealt": players},
+            # The site's own text, verbatim. Everything else in this view is
+            # something we derived, and the parser is the one link in that chain
+            # nothing downstream can check: if a pot or a position looks wrong,
+            # this is what settles it. None for a hand with no recorded source
+            # (the synthetic corpus), which is not the same as an empty one.
+            "source_text": str(hh.user_defined_fields.get(PHH_SOURCE_TEXT) or "") or None,
             "hero": {
                 "seat": hero,
                 "position": index.hero_position.value,

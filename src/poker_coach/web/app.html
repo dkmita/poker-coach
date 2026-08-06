@@ -114,6 +114,24 @@
   .empty { color: var(--dim); margin-top: 20vh; text-align: center; }
   h2 { margin: 0 0 4px; font-size: 20px; font-weight: 650; }
   .sub { color: var(--dim); margin-bottom: 22px; font-size: 13px; }
+  .pagehead { display: flex; align-items: flex-start; gap: 16px; }
+  .pagehead > div { flex: 1; min-width: 0; }
+  .srcbtn {
+    flex: none; margin-top: 2px; padding: 4px 11px; border-radius: 999px;
+    background: var(--panel); color: var(--dim); border: 1px solid var(--line);
+    font: 600 11px/1.4 inherit; cursor: pointer;
+  }
+  .srcbtn:hover { color: var(--text); border-color: #3a4150; }
+  .srcbtn.on { color: var(--text); background: var(--panel-2); }
+  /* The site's own text: monospace and pre-wrapped because ACR's alignment is
+     load-bearing, and capped in height so a long hand does not push the action
+     off the screen you opened it to compare against. */
+  .src {
+    margin: 0 0 22px; padding: 12px 14px; max-height: 40vh; overflow: auto;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    color: var(--dim); white-space: pre-wrap; word-break: break-word;
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
 
   .cards { display: inline-flex; gap: 4px; vertical-align: middle; }
   .card {
@@ -282,6 +300,9 @@ const bb = (n) => n === null || n === undefined ? "" : `${n}bb`;
 // so it reads in dollars while everything else stays in big blinds.
 const money = (cents) => `$${(cents / 100).toFixed(2)}`;
 const netClass = (n) => n > 0 ? "pos-net" : n < 0 ? "neg-net" : "zero-net";
+// The source text is the site's, not ours, and it contains other players'
+// screen names -- the one string on the page that must not be trusted as HTML.
+const esc = (s) => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
 async function loadList() {
   if (listMode !== "hands") { $("#rows").innerHTML = ""; offset = 0; listMode = "hands"; }
@@ -471,10 +492,20 @@ function render(v) {
   if (v.error) { $("#detail").innerHTML = `<div class="empty">${v.error}</div>`; return; }
   const h = v.hand, r = v.result;
   const byIndex = new Map(v.hero_decisions.map(d => [d.action_index, d]));
+  // Everything else on this page is derived; this is what the site actually
+  // said. Behind a button because it is the thing you reach for when a number
+  // looks wrong, not something to read on the way past.
+  const src = h.source_text
+    ? `<button class="srcbtn" type="button">source</button>` : "";
   $("#detail").innerHTML = `
-    <h2>${h.hero.position} &nbsp;${hole(h.hero.hole_cards)}</h2>
-    <div class="sub">${h.site}/${h.site_hand_id} · ${h.stakes.label} · ${h.table.players_dealt}-handed ·
-      ${h.hero.eff_stack_bb}bb effective</div>
+    <div class="pagehead">
+      <div>
+        <h2>${h.hero.position} &nbsp;${hole(h.hero.hole_cards)}</h2>
+        <div class="sub">${h.site}/${h.site_hand_id} · ${h.stakes.label} · ${h.table.players_dealt}-handed ·
+          ${h.hero.eff_stack_bb}bb effective</div>
+      </div>${src}
+    </div>
+    ${h.source_text ? `<pre class="src" hidden>${esc(h.source_text)}</pre>` : ""}
     <h3>Action</h3>
     ${v.streets.map(s => `<div class="street"><header>
         <span class="name">${s.street}</span>${board(s.board)}
@@ -667,6 +698,13 @@ async function route() {
 // stopPropagation because the click can land inside a hero <details> summary,
 // which would otherwise collapse the decision out from under the reveal.
 $("#detail").addEventListener("click", (e) => {
+  const btn = e.target.closest(".srcbtn");
+  if (btn) {
+    const pre = $(".src");
+    pre.hidden = !pre.hidden;
+    btn.classList.toggle("on", !pre.hidden);
+    return;
+  }
   const hit = e.target.closest(".peek");
   if (!hit) return;
   e.preventDefault();

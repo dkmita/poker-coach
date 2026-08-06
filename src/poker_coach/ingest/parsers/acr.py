@@ -39,7 +39,13 @@ from datetime import UTC, datetime
 
 from pokerkit.notation import HandHistory
 
-from ...models import PHH_HERO_INDEX, PHH_SITE, PHH_SITE_HAND_ID, Cents
+from ...models import (
+    PHH_HERO_INDEX,
+    PHH_SITE,
+    PHH_SITE_HAND_ID,
+    PHH_SOURCE_TEXT,
+    Cents,
+)
 
 SITE = "acr"
 
@@ -284,7 +290,7 @@ def to_phh(block: str, *, source_file: str = "") -> HandHistory:
             # lines, hand descriptions, the site's own rake breakdown), so the
             # source is the only thing that makes a later re-parse possible
             # without going back to the client's export folder.
-            "_pc_source_text": block,
+            PHH_SOURCE_TEXT: block,
             "_pc_source_file": source_file,
         },
     )
@@ -340,12 +346,12 @@ def dumps_phh(hh: HandHistory) -> str:
     diffable rather than base64.
     """
     udf = dict(hh.user_defined_fields)
-    source = udf.pop("_pc_source_text", "")
+    source = udf.pop(PHH_SOURCE_TEXT, "")
     text = replace(hh, user_defined_fields=udf).dumps()
     if source:
         # ACR never emits a triple quote; guard anyway rather than produce a
         # file that silently truncates.
         if "\'\'\'" in source:
             raise ParseError("source text contains a TOML multi-line delimiter")
-        text = text.rstrip("\n") + f"\n_pc_source_text = '''\n{source}\n'''\n"
+        text = text.rstrip("\n") + f"\n{PHH_SOURCE_TEXT} = '''\n{source}\n'''\n"
     return text

@@ -45,6 +45,10 @@ SUITS = "cdhs"
 PHH_SITE = "_pc_site"
 PHH_SITE_HAND_ID = "_pc_site_hand_id"
 PHH_SOURCE_FILE = "_pc_source_file"
+# The site's own text for this hand, verbatim. Kept because the parser is the
+# one place that can be wrong in a way nothing downstream can detect: if a
+# pot or a position looks off, the only way to settle it is the original.
+PHH_SOURCE_TEXT = "_pc_source_text"
 # PHH is player-neutral by design -- it archives a hand, not one player's view of
 # it -- so "hero" is our concept and has to be carried as an extension. 0-based,
 # matching PHH's player ordering (`p1` is index 0).
