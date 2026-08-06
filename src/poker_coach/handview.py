@@ -251,6 +251,13 @@ def _walk(
             board_by_street[st] = dealt
             street_seq.append(st)
 
+    # Cards for every seat that is ever revealed: hero always, a villain only if
+    # they showed. Carried on each action so a row can be rendered on its own.
+    # A villain's cards travel in the payload but the client keeps them
+    # face-down behind a click -- reviewing a decision means judging it without
+    # them, and this is post-session, so there is nothing being leaked live.
+    known_cards = {i: _hole_from_actions(hh, i) for i in range(players)}
+
     streets: dict[Street, dict] = {}
     hero_decisions: list[dict] = []
     # The last street hero actually acted on. Distinct from how far the *hand*
@@ -299,6 +306,7 @@ def _walk(
             "seat": seat,
             "position": _position(seat, players),
             "is_hero": seat == hero,
+            "cards": known_cards.get(seat),
             "action": kind.value,
             "amount_cents": amount,
             "amount_bb": _bb(amount, bb),

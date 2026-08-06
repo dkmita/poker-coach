@@ -223,6 +223,19 @@ def test_showdown_reports_cards_and_result(view):
     assert hero["net_cents"] == 530 and hero["won"] is True
 
 
+def test_actions_carry_the_actors_cards_when_known(view):
+    """Each action row renders on its own, so it carries whose cards they are.
+
+    The fixture's p6 never shows, so their rows stay null: the client draws a
+    card back either way, but only a non-null value is clickable, and offering a
+    reveal that cannot resolve is worse than not offering one.
+    """
+    acts = [a for s in view["streets"] for a in s["actions"]]
+    hero = [a for a in acts if a["is_hero"]]
+    assert hero and all(a["cards"] == ["Kd", "9d"] for a in hero)
+    assert any(a["cards"] is None for a in acts if not a["is_hero"])
+
+
 def test_unrevealed_hands_are_null_not_invented(view):
     """A villain who folded keeps their cards; inferring them would be fiction."""
     unknown = [p for p in view["showdown"]["players"] if p["cards"] is None]

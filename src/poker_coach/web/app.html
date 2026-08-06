@@ -80,7 +80,7 @@
   .row.hand { grid-template-columns: 44px auto minmax(0, 1fr) auto; }
   /* The labels column takes the slack, so labels sit against the hand rather
      than drifting right and reading as a second net column. */
-  .row .flags { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+  .row .flags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
   .row:hover { background: var(--panel-2); }
   .row.active { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--hero); }
   .row .pos { font-weight: 700; color: var(--hero); font-size: 12px; }
@@ -143,14 +143,30 @@
   }
   .street .pot { margin-left: auto; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
   .act {
-    display: grid; grid-template-columns: 52px 92px 1fr; gap: 10px;
+    display: grid; grid-template-columns: 58px 52px 64px 92px 1fr; gap: 10px;
     padding: 6px 14px; border-top: 1px solid #23262d; align-items: baseline;
   }
+  /* Right-aligned so the decimal points line up and the pot reads as a running
+     column down the street rather than five unrelated numbers. */
+  .act .potnow {
+    color: var(--dim); font-size: 12px; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Fixed cards column, not auto: a face-down single card is narrower than two
+     face-up ones, and an auto column would step the action verbs in and out
+     row by row. */
+  .act .cards { min-width: 60px; }
+  /* The outcome tally is three cells, not four: no action verb, and its cards
+     column has to hold "did not show". */
+  .act.tally { grid-template-columns: 52px 104px 1fr; }
+  .rake { color: var(--dim); font-size: 11px; font-weight: 600; margin-left: 6px; }
+  .act .peek { cursor: pointer; }
+  .act .peek:hover .card.back { color: var(--text); background: #2b2f38; }
   .act:first-of-type { border-top: 0; }
   .act.hero { background: rgba(110,168,254,.07); }
   details.act { display: block; padding: 0; }
   details.act > summary {
-    display: grid; grid-template-columns: 52px 92px 1fr auto auto; gap: 10px;
+    display: grid; grid-template-columns: 58px 52px 64px 92px 1fr auto auto; gap: 10px;
     align-items: baseline; padding: 6px 14px; cursor: pointer; list-style: none;
   }
   details.act > summary::-webkit-details-marker { display: none; }
@@ -161,7 +177,17 @@
   .decbody .facts { margin-top: 10px; }
   .act .who { color: var(--dim); font-weight: 650; font-size: 12px; }
   .act.hero .who { color: var(--hero); }
+  /* Same colours the chart grid gives these actions (ACTION_COLOUR), so a verb
+     in the action list and a cell in a range mean the same thing at a glance.
+     Aggression is bold and red, continuing is green; the passive actions are
+     unbolded because a check or a fold is rarely the thing to look at first. */
   .act .what { font-weight: 600; }
+  .act .what.bet, .act .what.raise { color: var(--bad); }
+  .act .what.call { color: var(--good); }
+  /* Check is not a colour of its own: it is the passive default, and giving it
+     the hero blue made every check look like it was hero's. */
+  .act .what.check { color: var(--text); font-weight: 400; }
+  .act .what.fold { color: var(--dim); font-weight: 400; }
   .act .size { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 13px; }
   .allin { color: var(--warn); font-weight: 700; font-size: 11px; letter-spacing: .05em; }
 
@@ -206,7 +232,7 @@
     #list { border-right: 0; border-bottom: 1px solid var(--line); }
     #detail { padding: 18px 16px 48px; }
     /* Let the action rows reflow rather than hold three rigid columns. */
-    .act { grid-template-columns: 46px 76px 1fr; gap: 8px; padding: 6px 12px; }
+    .act { grid-template-columns: 52px 46px 60px 76px 1fr; gap: 8px; padding: 6px 12px; }
     .street > header { flex-wrap: wrap; gap: 8px; }
     .street .pot { margin-left: 0; }
     .freq { grid-template-columns: 52px 1fr 40px; }
@@ -239,13 +265,14 @@ let showRef = false;
 // emoji on macOS and render in the font's own fixed colours, which throws away
 // the four-colour deck.
 const SUIT = { s: "\u2660\uFE0E", h: "\u2665\uFE0E", d: "\u2666\uFE0E", c: "\u2663\uFE0E" };
-const faces = (cs) => `<span class="cards">${cs.map(c =>
-  `<span class="card ${c[1]}">${c[0]}<i>${SUIT[c[1]] || c[1]}</i></span>`).join("")}</span>`;
+const cardEls = (cs) => cs.map(c =>
+  `<span class="card ${c[1]}">${c[0]}<i>${SUIT[c[1]] || c[1]}</i></span>`).join("");
+const faces = (cs) => `<span class="cards">${cardEls(cs)}</span>`;
+const BACK = `<span class="card back">??</span>`;
 
 // Two different absences, and they must not render the same way.
 // hole(): null means the cards exist but were never shown -> face-down.
-const hole = (cs) => cs && cs.length ? faces(cs)
-  : `<span class="cards"><span class="card back">??</span></span>`;
+const hole = (cs) => cs && cs.length ? faces(cs) : `<span class="cards">${BACK}</span>`;
 // board(): empty means no cards are out yet (preflop) -> show nothing. A
 // face-down card here would imply a hidden board that does not exist.
 const board = (cs) => cs && cs.length ? faces(cs) : "";
@@ -316,10 +343,30 @@ function actionSize(a) {
 // following the action; a separate decisions list repeated the whole sequence
 // and made you match rows by eye. The verdict label stays visible collapsed --
 // that is the part you scan for.
+// Whose cards to show on an action row. Hero's are always face-up -- they are
+// what the decision was made with. A villain still in the hand shows a card
+// back: reviewing a spot means judging it from what hero could see, so a row
+// that gave their holding away for free would be answering the question it is
+// supposed to ask. Where they did show at the end, the back is a button.
+// A folder gets nothing -- they are out, and their cards are never knowable.
+function actorCards(a) {
+  // Hero's fold still shows: what was folded is the decision being reviewed.
+  if (a.is_hero) return hole(a.cards);
+  if (a.action === "fold") return `<span class="cards"></span>`;
+  if (!a.cards) return `<span class="cards">${BACK}</span>`;
+  return `<span class="cards peek" data-seat="${a.seat}" data-cards="${
+    a.cards.join(",")}" title="Shown at showdown — click to reveal">${BACK}</span>`;
+}
+
 function renderAction(a, d) {
   const size = `${actionSize(a)}${a.is_all_in ? ' <span class="allin">ALL-IN</span>' : ""}`;
-  const head = `<span class="who">${a.position}</span>
-      <span class="what">${a.action}</span>
+  // The pot as it stood when this player had to act. Reading a hand means
+  // tracking what a bet is being laid against, and the street header's opening
+  // pot stops being that number the moment anyone puts money in.
+  const head = `<span class="potnow">${bb(a.pot_before_bb)}</span>
+      <span class="who">${a.position}</span>
+      ${actorCards(a)}
+      <span class="what ${a.action}">${a.action}</span>
       <span class="size">${size}</span>`;
   if (!a.is_hero || !d) {
     return `<div class="act${a.is_hero ? " hero" : ""}">${head}</div>`;
@@ -388,25 +435,36 @@ function renderVerdict(d) {
 function renderOutcome(v) {
   const sd = v.showdown;
   if (!sd || !sd.players.length) return "";
+  const rakeC = v.result.rake_cents || 0;
+  const bbC = v.hand.stakes.bb_cents;
+  // Rake sits on the winning row because that is whose money it came out of.
+  // The percentage is of the pre-rake win -- net plus the rake -- which is what
+  // the winner would have taken home had the house not dropped. Measuring it
+  // against the post-rake net instead understates the bite on every hand.
+  // Split pots award twice; the rake was taken once, so it prints once.
+  let raked = false;
+  const rakeTag = (p) => {
+    if (!p.won || raked) return "";
+    raked = true;
+    const gross = p.net_cents + rakeC;
+    if (!rakeC) return ' <span class="rake dimnote">no rake</span>';
+    const pct = gross > 0 ? ` · ${(100 * rakeC / gross).toFixed(1)}%` : "";
+    return ` <span class="rake" title="${money(rakeC)} — ${
+      pct ? "share of the pre-rake win" : "pre-rake win unknown"}">rake ${
+      (rakeC / bbC).toFixed(2)}bb${pct}</span>`;
+  };
   const rows = sd.players
     .slice().sort((a, b) => b.net_cents - a.net_cents)
-    .map(p => `<div class="act${p.is_hero ? " hero" : ""}">
+    .map(p => `<div class="act tally${p.is_hero ? " hero" : ""}">
         <div class="who">${p.position}</div>
         <div>${p.cards ? faces(p.cards) : '<span class="none">did not show</span>'}</div>
         <div class="size ${netClass(p.net_bb)}">${p.net_bb > 0 ? "+" : ""}${p.net_bb}bb${
-          p.won ? ' <span class="allin">WON</span>' : ""}</div>
+          p.won ? ' <span class="allin">WON</span>' : ""}${rakeTag(p)}</div>
       </div>`).join("");
-  const rakeC = v.result.rake_cents || 0;
-  const rakeBB = (rakeC / v.hand.stakes.bb_cents).toFixed(2);
-  // Zero is a real state, not missing data: ACR takes nothing when the hand ends
-  // before a flop ("no flop, no drop"), so say that rather than showing $0.00.
-  const rake = rakeC
-    ? `<span class="pot" title="${rakeBB}bb">rake ${money(rakeC)}</span>`
-    : `<span class="pot dimnote">no rake</span>`;
   return `<h3>Outcome</h3>
     <div class="street"><header>
         <span class="name">${sd.went_to_showdown ? "showdown" : "no showdown"}</span>
-        ${board(sd.board)}${rake}</header>${rows}</div>`;
+        ${board(sd.board)}</header>${rows}</div>`;
 }
 
 function render(v) {
@@ -602,6 +660,24 @@ async function route() {
     $("#detail").innerHTML = `<div class="empty">Select a hand</div>`;
   }
 }
+
+// Turning a villain's cards over. Delegated, because action rows are rebuilt
+// on every hand. Every row for that seat flips together -- revealing one and
+// leaving the others face-down would read as two different players.
+// stopPropagation because the click can land inside a hero <details> summary,
+// which would otherwise collapse the decision out from under the reveal.
+$("#detail").addEventListener("click", (e) => {
+  const hit = e.target.closest(".peek");
+  if (!hit) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const shown = hit.dataset.shown === "1";
+  const seat = Number(hit.dataset.seat);
+  for (const el of document.querySelectorAll(`.peek[data-seat="${seat}"]`)) {
+    el.dataset.shown = shown ? "" : "1";
+    el.innerHTML = shown ? BACK : cardEls(el.dataset.cards.split(","));
+  }
+});
 
 window.addEventListener("hashchange", route);
 route();
