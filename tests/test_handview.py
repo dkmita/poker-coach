@@ -145,3 +145,55 @@ def test_broken_provider_does_not_lose_the_hand(tmp_path):
     v = handview.build(load(p), provider=Broken())
     assert len(v["hero_decisions"]) == 5
     assert all(d["gto"] is None for d in v["hero_decisions"])
+
+
+HERO_FOLDS_PREFLOP = textwrap.dedent("""
+    variant = "NT"
+    antes = [0, 0, 0, 0, 0, 0]
+    blinds_or_straddles = [50, 100, 0, 0, 0, 0]
+    min_bet = 100
+    starting_stacks = [10000, 10000, 10000, 10000, 10000, 10000]
+    actions = [
+      "d dh p1 Ad6s", "d dh p2 4d4s", "d dh p3 ????",
+      "d dh p4 ????", "d dh p5 ????", "d dh p6 JhAs",
+      "p3 f", "p4 f", "p5 f", "p6 cbr 250", "p1 f", "p2 cbr 450", "p6 cc",
+      "d db 5s7sKh", "p2 cc", "p6 cc",
+      "d db 7d", "p2 cc", "p6 cc",
+      "d db Js", "p2 cc", "p6 cc",
+      "p2 sm 4d4s", "p6 sm JhAs",
+    ]
+    finishing_stacks = [9950, 9550, 10000, 10000, 10000, 10452]
+    _pc_site = "wpn"
+    _pc_site_hand_id = "ACR-2"
+    _pc_hero_index = 0
+""").strip()
+
+
+@pytest.fixture
+def folded_view(tmp_path):
+    p = tmp_path / "f.phh"
+    p.write_text(HERO_FOLDS_PREFLOP)
+    return handview.build(load(p))
+
+
+def test_hero_street_is_not_the_hands_street(folded_view):
+    """Hero folds preflop; the other two run it to the river.
+
+    Regression: the result block reported the hand's street and "anyone showed"
+    as if they were hero's, so a preflop fold rendered as
+    "reached river, showdown" -- which inflates how often you think you saw a flop.
+    """
+    r = folded_view["result"]
+    assert r["hero_street_reached"] == "preflop"
+    assert r["street_reached"] == "river"
+
+
+def test_hero_showdown_is_not_anyone_showdown(folded_view):
+    r = folded_view["result"]
+    assert r["hero_went_to_showdown"] is False
+    assert r["showdown"] is True
+
+
+def test_hero_reaching_showdown_is_reported(view):
+    """The other direction: when hero does show, say so."""
+    assert view["result"]["hero_street_reached"] == "river"

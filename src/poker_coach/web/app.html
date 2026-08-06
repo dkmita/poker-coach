@@ -94,6 +94,7 @@
   .freq.taken .n { color: var(--good); font-weight: 650; }
   .mixed { color: var(--warn); font-size: 11px; margin-top: 7px; }
   .none { color: var(--dim); font-size: 12px; font-style: italic; }
+  .dimnote { color: var(--dim); }
   .result { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; }
   h3 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 24px 0 10px; }
 
@@ -147,7 +148,7 @@ async function loadList() {
       el.innerHTML = `
         <div class="pos">${row.position}</div>
         <div>${hole(row.hole_cards)}
-          <div class="meta">${row.street_reached} · ${row.eff_stack_bb}bb</div></div>
+          <div class="meta">${row.hero_street_reached} · ${row.eff_stack_bb}bb</div></div>
         <div class="net ${netClass(row.hero_net_bb)}">${row.hero_net_bb > 0 ? "+" : ""}${row.hero_net_bb}</div>`;
     }
     el.onclick = () => open(row.file, el);
@@ -236,8 +237,11 @@ function render(v) {
       ${s.actions.map(renderAction).join("")}</div>`).join("")}
     <h3>Your decisions</h3>
     ${v.hero_decisions.map(renderDecision).join("")}
-    <div class="result">Reached ${r.street_reached}${r.went_to_showdown ? ", showdown" : ""} ·
-      net <span class="${netClass(r.hero_net_bb)}">${r.hero_net_bb > 0 ? "+" : ""}${r.hero_net_bb}bb</span></div>`;
+    <div class="result">You were out on <b>${r.hero_street_reached}</b>${r.hero_went_to_showdown ? ", at showdown" : ""} ·
+      net <span class="${netClass(r.hero_net_bb)}">${r.hero_net_bb > 0 ? "+" : ""}${r.hero_net_bb}bb</span>${
+        r.hero_street_reached !== r.street_reached
+          ? ` <span class="dimnote">(hand ran to ${r.street_reached}${r.showdown ? ", showdown" : ""} without you)</span>` : ""
+      }</div>`;
   $("#detail").scrollTop = 0;
 }
 

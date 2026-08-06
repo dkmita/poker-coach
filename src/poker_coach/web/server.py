@@ -77,13 +77,19 @@ class Archive:
             try:
                 hh = load(self.files[name])
                 idx = project_index(hh, phh_path=name, phh_sha256="")
-                cards = handview._hole_from_actions(hh, hero_index(hh))
+                hero = hero_index(hh)
+                cards = handview._hole_from_actions(hh, hero)
+                # Hero's own street, not the hand's: hero can fold preflop while
+                # the others run it to the river, and listing that as "river"
+                # badly overstates how often you saw a flop.
+                view = handview.build(hh)
                 rows.append(
                     {
                         "file": name,
                         "site_hand_id": idx.site_hand_id,
                         "position": idx.hero_position.value,
                         "hole_cards": cards,
+                        "hero_street_reached": view["result"]["hero_street_reached"],
                         "street_reached": idx.street_reached.value,
                         "hero_net_bb": round(idx.hero_net / idx.bb, 2),
                         "eff_stack_bb": round(idx.eff_stack_bb),

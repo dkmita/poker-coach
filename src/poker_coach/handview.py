@@ -96,7 +96,7 @@ def build(
         for i, s in enumerate(hh.starting_stacks)
     ]
 
-    streets, hero_decisions = _walk(hh, bb, hero, players)
+    streets, hero_decisions, hero_last_street = _walk(hh, bb, hero, players)
     _attach_gto(hero_decisions, provider, hh, hero)
 
     return {
@@ -124,11 +124,23 @@ def build(
         "streets": streets,
         "hero_decisions": hero_decisions,
         "result": {
+            # How far the HAND went -- the board that was dealt. True even if
+            # hero folded preflop and the others ran it out.
             "street_reached": index.street_reached.value,
+            "showdown": any(" sm " in a for a in hh.actions),
+            # How far HERO went. This is what a hero-centric view should lead
+            # with: reporting the hand's street as if it were hero's turns "you
+            # folded preflop" into "reached river, showdown", which is wrong in
+            # a way that inflates how often you think you saw a flop.
+            "hero_street_reached": (
+                hero_last_street.value if hero_last_street else index.street_reached.value
+            ),
+            "hero_went_to_showdown": any(
+                a.startswith(f"p{hero + 1} sm") for a in hh.actions
+            ),
             "hero_net_cents": index.hero_net,
             "hero_net_bb": _bb(index.hero_net, bb),
             "rake_cents": index.rake,
-            "went_to_showdown": any(" sm " in a for a in hh.actions),
         },
         # Filled by the analyze stage. Present and null so a client can rely on
         # the key existing rather than probing for it.
@@ -160,13 +172,16 @@ def _hole_from_actions(hh: HandHistory, seat: int) -> list[str] | None:
 
 def _walk(
     hh: HandHistory, bb: Cents, hero: int, players: int
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict], list[dict], Street | None]:
     """Single pass over the replay, producing per-street action and hero decisions.
 
     One pass because pokerkit mutates its `State` in place — see `replay.py`.
     """
     streets: dict[Street, dict] = {}
     hero_decisions: list[dict] = []
+    # The last street hero actually acted on. Distinct from how far the *hand*
+    # went: hero can fold preflop and the remaining players run it to the river.
+    hero_last_street: Street | None = None
     # Last aggressive action on the current street, so a decision can say what it
     # was actually facing rather than just a number.
     last_aggressor: dict[str, Any] | None = None
@@ -241,6 +256,7 @@ def _walk(
         bucket["actions"].append(entry)
 
         if seat == hero:
+            hero_last_street = street
             hero_decisions.append(
                 _decision(entry, street, bb, to_call, pot_before, stack_before, board, last_aggressor)
             )
@@ -254,7 +270,7 @@ def _walk(
             }
 
     ordered = sorted(streets.values(), key=lambda s: _STREET_ORDER[Street(s["street"])])
-    return ordered, hero_decisions
+    return ordered, hero_decisions, hero_last_street
 
 
 def _decision(
@@ -380,9 +396,13 @@ def render_text(view: dict[str, Any]) -> str:
 
     r = view["result"]
     out.append("")
+    tail = ""
+    if r["hero_street_reached"] != r["street_reached"]:
+        tail = f" (hand ran to {r['street_reached']})"
     out.append(
-        f"  result: {r['street_reached']}, hero {r['hero_net_bb']:+}bb"
-        f"{', showdown' if r['went_to_showdown'] else ''}"
+        f"  result: hero out on {r['hero_street_reached']}"
+        f"{', showdown' if r['hero_went_to_showdown'] else ''}, "
+        f"{r['hero_net_bb']:+}bb{tail}"
     )
     return "\n".join(out)
 
