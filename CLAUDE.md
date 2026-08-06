@@ -9,8 +9,10 @@ Early. What exists and works:
 - `models.py` — shared types
 - `corpus/schema.sql` — verified on SQLite 3.51 (7 tables, 2 views)
 - `replay.py` — the pokerkit boundary
+- `handview.py` — one hand as a JSON contract for a UI (`tools/show_hand.py` renders it)
+- `solvers/base.py` — `SolutionProvider` protocol + `NullProvider`; no real provider yet
 - `tools/generate_corpus.py` — synthetic PHH corpus with planted, labelled mistakes
-- `pyproject.toml` — `pokerkit>=0.7,<0.8`, Python ≥ 3.11; 20 tests passing
+- `pyproject.toml` — `pokerkit>=0.7,<0.8`, Python ≥ 3.11; 33 tests passing
 
 Not written yet: the ACR/WPN parser, the three pipeline stages, the range charts, and the CLI.
 Everything below describing those is agreed design, not shipped code — update this file as they
@@ -103,6 +105,41 @@ cost and an `open → fixed` lifecycle is deferred until these three stages work
 `leaks` table, and `runs.stage` has no `synthesize` value — both were removed rather than left as
 unused scaffolding. Re-adding them is a `schema_version = 2` migration; the original DDL is in git
 at `5b4a8f4` if it's useful as a starting point. Don't build toward it in the meantime.
+
+### Three tiers of output, split by cost
+
+A hand view separates these deliberately, and the split is what lets a client render
+something useful for free:
+
+| Tier | Source | Cost | Where it lands |
+|---|---|---|---|
+| Hand facts | pokerkit replay | free | always present |
+| Reference facts | charts / solver | expensive once, then cached | `gto` on each decision |
+| Judgments | LLM | expensive every time | `analysis` slots |
+
+**Solver output is a fact, not a judgment.** "The big blind defends this hand 100% vs a 2.5x
+button open at 100bb" is a deterministic, cacheable lookup — the same answer regardless of who
+asks. It belongs beside pot odds, not in the commentary. The consequence is that
+`"you folded laying 27%; equilibrium calls 82%"` is a complete, actionable statement with no
+model call. The LLM's job is explaining *why* and what it cost, not supplying the reference.
+
+Rules that follow:
+
+- `gto: null` means **not looked up**. It is not the same as "equilibrium is indifferent here",
+  which is a `Solution` with mixed frequencies. A client that renders them the same implies
+  knowledge it doesn't have.
+- `Solution.is_mixed()` exists because deviating at a genuinely mixed node is not a mistake.
+  Calling one a mistake is the fastest way to lose a user's trust in the tool.
+- Providers are **cache-first and failure-tolerant**: unavailable returns `None`, never raises.
+  `handview` swallows provider exceptions per decision, so a broken scraper costs you a `gto`
+  block and not the hand.
+- `spot_key` must never mention hero's cards or every lookup is a cache miss. Stack depth is
+  bucketed to 25bb, the granularity charts are published at.
+
+Numbers that are arithmetically defined but conventionally meaningless are suppressed, not
+computed: no SPR preflop (the pot is just blinds), no `pct_pot` on a preflop raise (those are
+read as multiples of the blind). "SPR 24.8" on a preflop fold is noise dressed as information,
+and a poker player reading the UI would clock it as a bug.
 
 ### Where data lives
 
