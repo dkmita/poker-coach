@@ -13,7 +13,8 @@ No parser, no pipeline stages, no `pyproject.toml` yet. `pokerkit` is a planned 
 
 ## What this is
 
-A post-session poker study tool for NLHE 6-max cash. Hand histories in, ranked leak report out.
+A post-session poker study tool for NLHE 6-max cash. Hand histories in, mistakes ranked by $EV lost
+out.
 See `README.md` for the pipeline diagram.
 
 **Hard constraint: no real-time assistance.** Nothing in this codebase may read a live table or
@@ -28,7 +29,7 @@ trivially correct, so the pipeline is a **funnel**: deterministic filters first,
 survivors. Preserve that shape — a change that sends every hand to an agent is a regression even
 if its output looks better.
 
-Four stages, each independently runnable so you can re-run one without redoing the others:
+Three stages, each independently runnable so you can re-run one without redoing the others:
 
 1. **Ingest** — read site hand histories, emit one `.phh` file per hand, index it in SQLite.
    Idempotent: re-reading a file must not create a second row (dedupe on `(site, site_hand_id)`).
@@ -37,8 +38,12 @@ Four stages, each independently runnable so you can re-run one without redoing t
    and free, because it is the thing that protects stage 3's budget.
 3. **Analyze** — Agent SDK agent per flagged decision, with custom tools for equity, ranges, solver
    lookup, and corpus search. Emits `findings` carrying an $EV-lost estimate.
-4. **Synthesize** — cluster findings into named leaks across *all* sessions, rank by cumulative
-   $EV lost, write the report. Reads `findings` from SQL; never opens a `.phh` file.
+
+**Out of scope for now: synthesis.** Clustering findings into named recurring leaks with cumulative
+cost and an `open → fixed` lifecycle is deferred until these three stages work. There is no
+`leaks` table, and `runs.stage` has no `synthesize` value — both were removed rather than left as
+unused scaffolding. Re-adding them is a `schema_version = 2` migration; the original DDL is in git
+at `5b4a8f4` if it's useful as a starting point. Don't build toward it in the meantime.
 
 ### Where data lives
 
@@ -49,7 +54,7 @@ worth stating flatly:
 |---|---|---|
 | `.phh` files | hands | Write-once and immutable, which is what files are good at. Open standard (PHH, TOML-based), human-readable, diffable, testable against the public PHH dataset. |
 | `pokerkit` | replay | Pot sizes, side pots, legal actions, stack tracking, hand evaluation. **Do not reimplement any of this.** |
-| SQLite | index + pipeline state | Findings get superseded, leak status moves `open → fixed`, flagged decisions get re-queued, "pending work, most expensive first" is an ordered query. Files are bad at that. |
+| SQLite | index + pipeline state | Findings get superseded when a prompt improves, flagged decisions get re-queued after a detector changes, and "pending work, most expensive first" is an ordered query. Files are bad at mutable, cross-referenced state. |
 
 The `hands` table indexes only what you **filter** on and points at `phh_path`. Detail stays in the
 `.phh` file. Add a column when a query proves slow — do not mirror by default, because a SQL mirror
@@ -64,8 +69,9 @@ annoyance, not a constraint.
 - **$EV lost is the ranking currency.** Every finding carries one. Reports rank by money, never by
   error count.
 - **A flagged decision is keyed on the decision, not the detector.** Two rules firing on one call
-  must produce one judgement; per-detector rows would double-count that money in leak totals and
-  inflate exactly the leaks whose detectors overlap most. Detectors live in a child table.
+  must produce one judgement. Per-detector rows would put the same mistake in the report twice and
+  count its cost twice in any total — and would do it worst to the spots with the most overlapping
+  detectors. Detectors live in a child table.
 - **Parsers emit PHH.** The `SiteParser` contract is "produces a valid `.phh` file", not "produces
   our dataclasses". Nothing outside `ingest/parsers/` knows which site a hand came from.
 - **Solver access sits behind a `SolutionProvider` interface**, cache-first, keyed on the abstract
@@ -110,7 +116,6 @@ src/poker_coach/
 ├── agent/
 │   ├── tools.py         # @tool defs + create_sdk_mcp_server
 │   ├── analyst.py       # stage 3
-│   ├── synthesist.py    # stage 4
 │   └── prompts/         # system prompts as files, not inline strings
 ├── solvers/
 │   ├── base.py          # SolutionProvider protocol

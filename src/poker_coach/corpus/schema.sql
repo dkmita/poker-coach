@@ -10,10 +10,9 @@
 --      opinion about.
 --
 -- The split follows mutability. A hand is write-once, which is what files are
--- good at. Findings get superseded when a prompt improves, leak status moves
--- open -> fixed, flagged decisions get re-queued after a detector changes, and
--- "pending work, most expensive first" is an ordered query. That is what a
--- database is for.
+-- good at. Findings get superseded when a prompt improves, flagged decisions get
+-- re-queued after a detector changes, and "pending work, most expensive first" is
+-- an ordered query. That is what a database is for.
 --
 -- Correspondingly, the `hands` table indexes only what you FILTER on. Detail
 -- stays in the `.phh` file. Add a column when a query proves slow, not by
@@ -52,7 +51,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 -- deleted without touching the archive.
 CREATE TABLE IF NOT EXISTS runs (
     id           INTEGER PRIMARY KEY,
-    stage        TEXT NOT NULL CHECK (stage IN ('ingest', 'triage', 'analyze', 'synthesize')),
+    stage        TEXT NOT NULL CHECK (stage IN ('ingest', 'triage', 'analyze')),
     started_at   TEXT NOT NULL,
     finished_at  TEXT,
     status       TEXT NOT NULL DEFAULT 'running'
@@ -127,7 +126,7 @@ CREATE TABLE IF NOT EXISTS hands (
 );
 
 CREATE INDEX IF NOT EXISTS idx_hands_played_at ON hands (played_at DESC);
--- The shape most triage and leak queries take: a position at a stack depth.
+-- The shape most triage and reporting queries take: a position at a stack depth.
 CREATE INDEX IF NOT EXISTS idx_hands_spot
     ON hands (hero_position, eff_stack_bb, bb);
 CREATE INDEX IF NOT EXISTS idx_hands_phh_path ON hands (phh_path);
@@ -140,9 +139,9 @@ CREATE INDEX IF NOT EXISTS idx_hands_phh_path ON hands (phh_path);
 -- to judge. A suspicion, not a verdict.
 --
 -- The unit is the DECISION, not the detector. Two rules can fire on the same
--- loose river call; one row per detector would produce two findings for one
--- mistake and double-count its cost in leak totals -- inflating exactly the
--- leaks whose detectors overlap most.
+-- loose river call; one row per detector would put that mistake in the report
+-- twice and count its cost twice in any total -- worst for exactly the spots
+-- with the most overlapping detectors.
 --
 -- Roughly 10% of hero decisions should land here. If that fraction climbs the
 -- funnel is broken, and stage 3 cost scales with volume instead of with signal.
@@ -199,7 +198,7 @@ CREATE TABLE IF NOT EXISTS findings (
     id                  INTEGER PRIMARY KEY,
     flagged_decision_id INTEGER NOT NULL
                         REFERENCES flagged_decisions (id) ON DELETE CASCADE,
-    -- Denormalized so leak queries reach the hand without a three-way join.
+    -- Denormalized so reporting queries reach the hand without a three-way join.
     hand_id             INTEGER NOT NULL REFERENCES hands (id) ON DELETE CASCADE,
     action_index        INTEGER NOT NULL,
 
@@ -233,53 +232,15 @@ CREATE INDEX IF NOT EXISTS idx_findings_ev ON findings (ev_lost DESC)
 CREATE INDEX IF NOT EXISTS idx_findings_hand ON findings (hand_id);
 
 -- ---------------------------------------------------------------------------
--- Stage 4: synthesized leaks
+-- Not here yet: synthesis
 -- ---------------------------------------------------------------------------
-
--- A named, recurring pattern -- what the report is actually about. Findings are
--- per-hand evidence; a leak is the claim they support.
-CREATE TABLE IF NOT EXISTS leaks (
-    id              INTEGER PRIMARY KEY,
-    -- Stable identifier, e.g. 'bb-overfold-vs-btn-open'. Cumulative history
-    -- hangs off this, so renaming a slug orphans the trend.
-    slug            TEXT NOT NULL UNIQUE,
-    title           TEXT NOT NULL,
-    description     TEXT NOT NULL DEFAULT '',
-
-    -- Recomputed by each synthesis run rather than incremented, so a re-run over
-    -- corrected findings self-heals.
-    hand_count      INTEGER NOT NULL DEFAULT 0,
-    total_ev_lost   INTEGER NOT NULL DEFAULT 0,
-    -- Rate, not total: the honest way to compare a leak seen 500 times against
-    -- one seen 12 times.
-    ev_lost_per_100 REAL,
-
-    first_seen_at   TEXT,
-    last_seen_at    TEXT,
-    status          TEXT NOT NULL DEFAULT 'open'
-                    CHECK (status IN ('open', 'monitoring', 'fixed', 'dismissed')),
-
-    run_id          INTEGER REFERENCES runs (id) ON DELETE SET NULL,
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_leaks_ranking ON leaks (status, total_ev_lost DESC);
-
--- Many-to-many on purpose: one loose call can be evidence for both a
--- preflop-range leak and a pot-odds-discipline leak, and forcing a single parent
--- would make the report's totals depend on an arbitrary tie-break.
-CREATE TABLE IF NOT EXISTS finding_leaks (
-    finding_id  INTEGER NOT NULL REFERENCES findings (id) ON DELETE CASCADE,
-    leak_id     INTEGER NOT NULL REFERENCES leaks (id) ON DELETE CASCADE,
-    -- Share of this finding's ev_lost attributed to this leak. Weights across
-    -- one finding should sum to 1.0 so leak totals don't double-count money.
-    weight      REAL NOT NULL DEFAULT 1.0 CHECK (weight > 0 AND weight <= 1.0),
-
-    PRIMARY KEY (finding_id, leak_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_finding_leaks_leak ON finding_leaks (leak_id);
+--
+-- Clustering findings into named recurring leaks (cumulative cost, an
+-- open -> fixed lifecycle, a leaks / finding_leaks pair) is deliberately absent
+-- until the three stages above work. Unused tables are the same drift problem as
+-- a stale mirror: they invite code to be written against a shape nobody has
+-- validated. Re-adding is a schema_version = 2 migration; the earlier DDL is in
+-- git at 5b4a8f4.
 
 -- ---------------------------------------------------------------------------
 -- Solver cache
@@ -353,23 +314,6 @@ JOIN flagged_decisions fd ON fd.id = d.flagged_decision_id
 LEFT JOIN findings f ON f.flagged_decision_id = fd.id
 GROUP BY d.detector
 ORDER BY ev_lost_found DESC;
-
--- The report's front page: open leaks, most expensive first.
-CREATE VIEW IF NOT EXISTS v_leak_ranking AS
-SELECT
-    l.slug,
-    l.title,
-    l.status,
-    l.hand_count,
-    l.total_ev_lost,
-    l.ev_lost_per_100,
-    l.last_seen_at,
-    COUNT(fl.finding_id) AS finding_count
-FROM leaks l
-LEFT JOIN finding_leaks fl ON fl.leak_id = l.id
-WHERE l.status IN ('open', 'monitoring')
-GROUP BY l.id
-ORDER BY l.total_ev_lost DESC;
 
 INSERT OR IGNORE INTO schema_version (version, applied_at)
 VALUES (1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));

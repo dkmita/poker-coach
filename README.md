@@ -2,9 +2,8 @@
 
 Agentic system that analyzes hands while you play or sleep.
 
-You play a session. Overnight, poker-coach reads the hand histories, works out where your
-decisions cost money, and hands you a prioritized leak report plus a drill set for your next
-study block.
+You play a session. Overnight, poker-coach reads the hand histories, works out which of your
+decisions cost money, and hands you those mistakes ranked by what they cost.
 
 **This is a study tool, not a real-time assistant.** Everything runs after a session ends, on
 your own hand histories. Nothing reads the table, and nothing advises you mid-hand — real-time
@@ -19,7 +18,7 @@ gap.
 | **Game** | No-limit hold'em, 6-max cash |
 | **Input** | Hand-history files written by an online client (site-agnostic parser; PokerStars-style format first) |
 | **Timing** | Overnight batch, or on demand after a session |
-| **Output** | Ranked leak report + drill hands, written to disk |
+| **Output** | Your mistakes, ranked by $EV lost, written to disk |
 
 ## How it works
 
@@ -30,26 +29,31 @@ kill the boring majority, and only the survivors reach an agent.
 ```
   hand histories
         │
-   1. INGEST ......... parse to one canonical hand model, store in SQLite      (free)
+   1. INGEST ......... convert to .phh, index in SQLite                    (free)
         │
-   2. TRIAGE ......... preflop charts + equity/EV math flag candidate errors   (cheap, deterministic)
-        │              ~90% of hands stop here
-   3. ANALYZE ........ agent reasons over each candidate, with tools for
-        │              equity, solver lookup, and corpus search               (expensive)
-        │
-   4. SYNTHESIZE ..... cluster findings into named leaks across sessions,
-        │              rank by $EV lost                                        (one pass)
+   2. TRIAGE ......... replay each hand; charts + equity/EV math flag
+        │              hero decisions worth a look                         (cheap, deterministic)
+        │              ~90% of decisions stop here
+   3. ANALYZE ........ agent judges each flagged decision, with tools for
+        │              equity, solver lookup, and corpus search            (expensive)
         ▼
-     report + drills
+   findings, ranked by $EV lost
 ```
 
-Two things are load-bearing:
+**$EV lost is the ranking currency** — not error count. "You over-fold BB vs BTN 2.5x" only matters
+if it's costing real money, and that's what makes the output actionable instead of a wall of
+nitpicks.
 
-- **$EV lost is the ranking currency.** Not error count. "You over-fold BB vs BTN 2.5x" only
-  matters if it's costing real money, and that's what makes the report actionable instead of a
-  wall of nitpicks.
-- **Hands accumulate in a local corpus.** One session can't reveal a leak; a leak is a pattern
-  across sessions. The SQLite database is the product — the nightly run just adds to it.
+Hands accumulate in a local corpus regardless, because that's where the raw material for
+cross-session analysis will come from later. But nothing reads across sessions yet: today's output
+is a ranked list of individual mistakes from the hands you just played.
+
+### Deliberately not built yet
+
+**Synthesis** — clustering findings into named, recurring leaks with cumulative cost and a
+`open → fixed` lifecycle. That's the thing that turns "these 40 hands were mistakes" into "you
+over-fold the big blind, and it has cost you $310 this month." It's the eventual point of the
+project, and it's out of scope until the three stages above actually work.
 
 ## Stack
 
@@ -62,11 +66,10 @@ Two things are load-bearing:
 - **[pokerkit](https://github.com/uoftcprg/pokerkit)** as the replay engine: pot sizes, side pots,
   legal actions, stack tracking, hand evaluation. We don't reimplement game logic.
 - **SQLite** for an index over the archive plus all mutable pipeline state — flagged decisions,
-  findings, leak history, the solver cache, run provenance. Hands stay in PHH; the database holds
-  what changes.
+  findings, the solver cache, run provenance. Hands stay in PHH; the database holds what changes.
 - **[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)** (`claude-agent-sdk`) for the
-  analysis and synthesis stages: built-in file/search tools plus custom in-process MCP tools for
-  equity, ranges, solver lookups, and corpus queries
+  analysis stage: built-in file/search tools plus custom in-process MCP tools for equity, ranges,
+  solver lookups, and corpus queries
 
 ## Solver lookups
 

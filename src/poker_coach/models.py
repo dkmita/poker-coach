@@ -155,13 +155,6 @@ class Verdict(Enum):
     UNCLEAR = "unclear"
 
 
-class LeakStatus(Enum):
-    OPEN = "open"
-    MONITORING = "monitoring"
-    FIXED = "fixed"
-    DISMISSED = "dismissed"
-
-
 @dataclass(frozen=True, slots=True)
 class HandIndex:
     """The filterable projection of a hand -- one row in the `hands` table.
@@ -273,8 +266,8 @@ class FlaggedDecision:
     """A hero decision that triage thinks is worth paying an agent to judge.
 
     A suspicion, not a verdict. The unit is the *decision*, not the detector: two
-    rules can fire on the same call, and one row per detector would produce two
-    findings for one mistake and double-count its cost in leak totals.
+    rules can fire on the same call, and one row per detector would put that
+    mistake in the report twice and count its cost twice in any total.
     """
 
     hand_id: int
