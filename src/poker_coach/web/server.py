@@ -134,7 +134,6 @@ class Archive:
                     "hero_street_reached": r["hero_street_reached"],
                     "street_reached": r["street_reached"],
                     "hero_net_bb": r["hero_net_bb"],
-                    "eff_stack_bb": round(h["hero"]["eff_stack_bb"]),
                     "preflop_off_chart": off,
                     "interest": view["interest"]["reasons"],
                 }

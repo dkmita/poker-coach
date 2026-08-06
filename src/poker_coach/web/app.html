@@ -77,7 +77,15 @@
   }
   /* Labels get their own column so the eye can scan straight down them. Under
      the hand they moved with the card count and were easy to miss entirely. */
-  .row.hand { grid-template-columns: 44px auto minmax(0, 1fr) auto; }
+  .row.hand { grid-template-columns: 58px auto minmax(0, 1fr) auto; }
+  /* The time leads the row because the list is chronological -- it is the axis
+     you scan down. Position moved into the meta line, where it still reads as
+     the hero colour but no longer claims a column of its own. */
+  .row .when {
+    color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .row .meta .pos { color: var(--hero); font-weight: 700; }
   /* The labels column takes the slack, so labels sit against the hand rather
      than drifting right and reading as a second net column. */
   .row .flags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
@@ -354,10 +362,10 @@ async function loadList() {
     } else {
       const off = row.preflop_off_chart || [];
       el.innerHTML = `
-        <div class="pos">${row.position}</div>
+        <div class="when">${row.played_at ? clock(when(row.played_at)) : ""}</div>
         <div>${hole(row.hole_cards)}
-          <div class="meta">${row.played_at ? clock(when(row.played_at)) + " · " : ""}${
-            row.hero_street_reached} · ${row.eff_stack_bb}bb</div></div>
+          <div class="meta"><b class="pos">${row.position}</b> · ${
+            row.hero_street_reached}</div></div>
         <div class="flags">
           ${off.length ? `<div class="flag" title="${off.join(" · ")}">${
             off.length > 1 ? `${off.length} preflop` : "preflop"}</div>` : ""}${
