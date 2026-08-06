@@ -75,20 +75,25 @@
     padding: 10px 16px; border-bottom: 1px solid var(--line); cursor: pointer;
     display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center;
   }
+  /* Labels get their own column so the eye can scan straight down them. Under
+     the hand they moved with the card count and were easy to miss entirely. */
+  .row.hand { grid-template-columns: 44px auto minmax(0, 1fr) auto; }
+  /* The labels column takes the slack, so labels sit against the hand rather
+     than drifting right and reading as a second net column. */
+  .row .flags { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
   .row:hover { background: var(--panel-2); }
   .row.active { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--hero); }
   .row .pos { font-weight: 700; color: var(--hero); font-size: 12px; }
   .row .meta { color: var(--dim); font-size: 12px; }
   .row .net { font-variant-numeric: tabular-nums; font-size: 12px; }
   .row .flag {
-    display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 999px;
-    font-size: 10px; font-weight: 650; color: var(--bad);
+    display: inline-block; padding: 1px 7px; border-radius: 999px;
+    font-size: 10px; font-weight: 650; color: var(--bad); white-space: nowrap;
     background: rgba(224,108,117,.12); border: 1px solid rgba(224,108,117,.35);
   }
   /* Interest is a nudge to look, not a criticism -- it must not read as an error. */
   .row .flag.note {
     color: var(--dim); background: var(--panel-2); border-color: var(--line);
-    margin-left: 4px;
   }
   .pos-net { color: var(--good); } .neg-net { color: var(--bad); } .zero-net { color: var(--dim); }
   .group {
@@ -267,16 +272,17 @@ async function loadList() {
   total = r.total;
   for (const row of r.rows) {
     const el = document.createElement("div");
-    el.className = "row";
+    el.className = "row hand";
     el.dataset.file = row.file;
     if (row.error) {
-      el.innerHTML = `<div class="pos">!</div><div class="meta">${row.file}</div><div></div>`;
+      el.innerHTML = `<div class="pos">!</div><div class="meta">${row.file}</div><div></div><div></div>`;
     } else {
       const off = row.preflop_off_chart || [];
       el.innerHTML = `
         <div class="pos">${row.position}</div>
         <div>${hole(row.hole_cards)}
-          <div class="meta">${row.hero_street_reached} · ${row.eff_stack_bb}bb</div>
+          <div class="meta">${row.hero_street_reached} · ${row.eff_stack_bb}bb</div></div>
+        <div class="flags">
           ${off.length ? `<div class="flag" title="${off.join(" · ")}">${
             off.length > 1 ? `${off.length} preflop` : "preflop"}</div>` : ""}${
             (row.interest || []).length ? `<div class="flag note" title="${
