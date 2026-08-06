@@ -32,6 +32,7 @@ from typing import Any
 
 from pokerkit.notation import HandHistory
 
+from .equity import hand_vs_hand, price_call
 from .models import PHH_COLLECTED, PHH_SOURCE_TEXT, ActionType, Cents, Street
 from .solvers.base import SolutionProvider
 from .replay import (
@@ -102,6 +103,7 @@ def build(
     streets, hero_decisions, hero_last_street = _walk(hh, bb, hero, players)
     _attach_gto(hero_decisions, provider, hh, hero)
     _attach_villain_verdicts(streets, provider, hero)
+    _attach_price(streets, hh, players)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -365,6 +367,12 @@ def _walk(
             "cards": known_cards.get(seat),
             # Why this node is worth pricing exactly -- see `_terminal`.
             "terminal": _terminal(st, seat, street, folded, players),
+            # Who could still act behind, and what it cost to continue. Both are
+            # what pricing the node needs, and both are only knowable here.
+            "live_opponents": [
+                i for i in range(players) if i != seat and i not in folded
+            ],
+            "to_call_bb": _bb(to_call, bb),
             # Built for every actor. The key never mentioned whose decision it
             # was -- it is the abstract spot -- so a villain's looks a chart up
             # exactly the way hero's does.
@@ -465,8 +473,12 @@ def _terminal(st, seat: int, street: Street, folded: set[int], players: int) -> 
     A **terminal** node is one where calling ends all betting, so calling and
     folding are the only continuations and both have a closed-form value:
 
-        EV(call) = equity × (pot + call) − (1 − equity) × call
+        EV(call) = equity × (pot + call) − call
         EV(fold) = 0
+
+    (`equity × (pot + call) − (1 − equity) × call` is the same expression with
+    the halves of two arrangements mixed, and counts your own call as winnings.
+    See `equity.py`.)
 
     Everywhere else the value of a call depends on how the remaining streets get
     played by both players, which is the thing solvers exist to compute and the
@@ -677,6 +689,61 @@ def _attach_gto(
         if solution is not None:
             d["gto"] = solution.as_fact()
             d["verdict"] = _verdict(d["hero_action"], solution)
+
+
+def _attach_price(streets: list[dict], hh: HandHistory, players: int) -> None:
+    """Put a number on every terminal node where both hands ended up known.
+
+    Only heads-up-by-then spots qualify, which `_terminal` already guarantees for
+    the river case and which is checked here for the all-in case: with two
+    opponents shown there are two equities and a side pot, and one number would
+    be a guess wearing an exact number's clothes.
+
+    Priced whatever the player actually did. On a node they raised or folded, the
+    figure is what *calling* was worth -- the one branch with a closed form -- and
+    the UI says so. That is still the useful comparison: it is the price of the
+    option they turned down.
+    """
+    shown = {i: _hole_from_actions(hh, i) for i in range(players)}
+    shown_hero = hero_index(hh)
+    for street in streets:
+        board = "".join(street["board"])
+        for a in street["actions"]:
+            if not (a["terminal"] and a["cards"]):
+                continue
+            opponents = [
+                "".join(c)
+                for i, c in shown.items()
+                if i != a["seat"] and c and i in a["live_opponents"]
+            ]
+            if len(opponents) != 1:
+                continue
+            call = a["to_call_bb"]
+            if not call:
+                continue
+            eq = hand_vs_hand("".join(a["cards"]), opponents[0], board)
+            seat = next(
+                i for i, c in shown.items()
+                if i != a["seat"] and c and i in a["live_opponents"]
+            )
+            a["price"] = {
+                "villain": _cards_list(opponents[0]),
+                # So the client can keep the hindsight half behind the same
+                # click that turns their cards over. Hero's are always face-up,
+                # so nothing to hide when the opponent is hero.
+                "villain_seat": seat,
+                "villain_is_hero": shown_hero == seat,
+                "pot_bb": a["pot_before_bb"],
+                "call_bb": call,
+                "equity": round(eq.equity, 4),
+                "runouts": eq.runouts,
+                "exact": eq.exact,
+                **price_call(a["pot_before_bb"], call, eq.equity),
+            }
+
+
+def _cards_list(text: str) -> list[str]:
+    return [text[i : i + 2] for i in range(0, len(text), 2)]
 
 
 def _attach_villain_verdicts(

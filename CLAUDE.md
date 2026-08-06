@@ -207,7 +207,11 @@ annoyance, not a constraint.
 
 All three were found empirically against 0.7.4, all three fail by returning
 plausible-but-wrong numbers rather than raising, and all three are why the dependency is pinned
-`>=0.7,<0.8` and confined to one module. **Nothing outside `replay.py` may import pokerkit.**
+`>=0.7,<0.8` and confined to two modules. **Only `replay.py` and `equity.py` may import
+pokerkit** — `replay.py` owns `pokerkit.notation` (replaying a hand), `equity.py` owns
+`pokerkit.hands` (evaluating one). Two different surfaces; folding evaluation into `replay.py`
+would make that module a grab bag, and the point of the rule is that an upgrade has a small,
+named blast radius, not that the number of files is one.
 
 1. **One `State` object, mutated in place.** Every `state_actions` pair yields the same instance,
    so `[s for s, _ in hh.state_actions]` is N references to the *final* state. Read what you need

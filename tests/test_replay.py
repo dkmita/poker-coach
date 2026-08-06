@@ -276,3 +276,74 @@ def test_missing_hero_index_is_an_error(tmp_path):
     path.write_text(HAND.replace("_pc_hero_index = 1", ""))
     with pytest.raises(ReplayError, match="hero"):
         hero_index(load(path))
+
+
+# ---- equity ----------------------------------------------------------------
+# The pricing arithmetic for terminal nodes. Its failure mode is a confidently
+# wrong bb figure, so the assertions are on hands whose answer is knowable by
+# hand rather than on anything a change could quietly re-baseline.
+
+def test_equity_is_exact_when_the_runouts_are_few():
+    from poker_coach.equity import hand_vs_hand
+
+    # Trip queens against one pair with one card to come: nothing gets there.
+    e = hand_vs_hand("QsTs", "KdAc", "9hQdQh5s")
+    assert e.exact is True and e.runouts == 44
+    assert e.equity == 1.0
+
+
+def test_a_chop_is_half_not_a_loss():
+    """Ties count half. `StandardHighHand` compares equal on one, and a chopped
+    pot coming back as 0% would price every one of them as a disaster."""
+    from poker_coach.equity import hand_vs_hand
+
+    e = hand_vs_hand("6dKd", "6sKh", "JhQc4hTdAs")
+    assert e.runouts == 1 and e.equity == 0.5
+
+
+def test_a_board_that_plays_is_a_chop():
+    from poker_coach.equity import hand_vs_hand
+
+    assert hand_vs_hand("2c3d", "7s8s", "AhKhQhJhTh").equity == 0.5
+
+
+def test_sampling_is_seeded_not_global():
+    """Preflop is 1.7M runouts, so it samples -- reproducibly, and without
+    reaching into `random`, which the corpus generator relies on being untouched."""
+    import random
+
+    from poker_coach.equity import hand_vs_hand
+
+    random.seed(1234)
+    a = hand_vs_hand("AsAh", "KhKd")
+    before = random.random()
+    random.seed(1234)
+    b = hand_vs_hand("AsAh", "KhKd")
+    assert a.equity == b.equity          # same seed, same answer
+    assert a.exact is False
+    assert before == random.random()     # the global stream never advanced
+    assert 0.79 < a.equity < 0.85        # aces over kings, about 82%
+
+
+def test_duplicate_cards_are_rejected():
+    from poker_coach.equity import hand_vs_hand
+
+    with pytest.raises(ValueError, match="duplicate"):
+        hand_vs_hand("AsAh", "AsKd", "")
+
+
+def test_a_call_with_no_losing_outcome_wins_exactly_the_pot():
+    """The formula error this caught: `eq*(pot+call) - (1-eq)*call` counts your
+    own call as winnings and reports +200 where the pot is 150.8."""
+    from poker_coach.equity import price_call
+
+    p = price_call(pot=150.8, call=49.2, equity=1.0)
+    assert p["ev"] == 150.8
+    assert p["needed"] == round(49.2 / 200.0, 4)
+
+
+def test_break_even_equity_prices_a_call_at_zero():
+    from poker_coach.equity import price_call
+
+    p = price_call(pot=3.0, call=1.0, equity=0.25)
+    assert p["ev"] == 0.0 and p["edge"] == 0.0

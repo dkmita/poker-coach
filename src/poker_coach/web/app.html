@@ -113,6 +113,19 @@
     display: inline-block; padding: 1px 7px; border-radius: 999px; border: 1px solid;
     font-size: 10px; font-weight: 650; white-space: nowrap; margin-left: 8px;
   }
+  /* Sits under the sizing, inside the same cell, so the row keeps its columns. */
+  .priced {
+    display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px;
+    font-size: 11px; color: var(--dim);
+  }
+  .priced b { color: var(--text); font-weight: 650; }
+  .priced .pos-net b { color: var(--good); }
+  .priced .neg-net b { color: var(--bad); }
+  .priced .hindsight { display: contents; }
+  .priced .work {
+    flex-basis: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px; opacity: .75;
+  }
   .pos-net { color: var(--good); } .neg-net { color: var(--bad); } .zero-net { color: var(--dim); }
   .group {
     padding: 12px 16px 6px; font-size: 10px; font-weight: 700; color: var(--dim);
@@ -458,6 +471,33 @@ function actorCards(a) {
     a.cards.join(",")}" title="Shown at showdown — click to reveal">${BACK}</span>`;
 }
 
+// The whole point of marking a terminal node is that its price is knowable, so
+// the row shows the price and the arithmetic that produced it. Hindsight, and
+// labelled as such: the equity is against the hand they actually turned over,
+// which answers what the call was worth and not whether it was right.
+function priced(a) {
+  const p = a.price;
+  if (!p) return "";
+  const pot = p.pot_bb, call = p.call_bb, eq = p.equity;
+  const verb = a.action === "call" ? "calling" : "calling would have been";
+  const sum = `${eq.toFixed(3)} × (${pot} + ${call}) − ${call} = ${p.ev > 0 ? "+" : ""}${p.ev}bb`;
+  // "needed" is a fact of the pot -- price and stake, nothing about anyone's
+  // cards -- so it always shows. Everything after it is equity against the hand
+  // they actually turned over, which is both hindsight and a card reveal, so it
+  // waits for the same click their cards do.
+  const gate = p.villain_is_hero ? "" : ` data-peeked="${p.villain_seat}" hidden`;
+  return `<div class="priced">
+    <span>needed <b>${(p.needed * 100).toFixed(0)}%</b></span>
+    <span class="hindsight"${gate}>
+      <span>had <b>${(p.equity * 100).toFixed(0)}%</b> vs ${p.villain.join("")}</span>
+      <span class="${netClass(p.ev)}">${verb} <b>${p.ev > 0 ? "+" : ""}${p.ev}bb</b></span>
+      <span class="work">${sum} · ${p.exact
+        ? `all ${p.runouts.toLocaleString()} runout${p.runouts === 1 ? "" : "s"}`
+        : `${p.runouts.toLocaleString()} sampled runouts, so ±½ point`}</span>
+    </span>
+  </div>`;
+}
+
 function renderAction(a, d) {
   // Marked on the row rather than only in a summary: the point of the label is
   // to say which decision in the hand is the one with a knowable price.
@@ -475,7 +515,7 @@ function renderAction(a, d) {
   // the thing you are supposed to be judging without.
   const villain = !a.is_hero && a.verdict
     ? " " + verdictLink(a.verdict, `data-peeked="${a.seat}" hidden`) : "";
-  const size = `${actionSize(a)}${a.is_all_in ? ' <span class="allin">ALL-IN</span>' : ""}${exact}${villain}`;
+  const size = `${actionSize(a)}${a.is_all_in ? ' <span class="allin">ALL-IN</span>' : ""}${exact}${villain}${priced(a)}`;
   const head = `<span class="who">${a.position}</span>
       ${actorCards(a)}
       <span class="what ${a.action}">${a.action}</span>
