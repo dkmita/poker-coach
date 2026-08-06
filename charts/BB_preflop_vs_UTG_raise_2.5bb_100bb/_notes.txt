@@ -1,0 +1,3 @@
+Underscore-prefixed files are ignored by ChartProvider, so notes can live next
+to the ranges. The call.txt / raise.txt here are ILLUSTRATIVE PLACEHOLDERS, not
+a real solve -- replace them with a GTO Wizard export before trusting anything.

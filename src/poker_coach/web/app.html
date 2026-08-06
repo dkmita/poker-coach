@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>poker-coach</title>
+<style>
+  :root {
+    --bg: #14161a;      --panel: #1b1e24;    --panel-2: #21252c;
+    --line: #2c313a;    --text: #e6e8ec;     --dim: #8b93a1;
+    --hero: #6ea8fe;    --good: #5fb87a;     --warn: #d8a657;    --bad: #e06c75;
+    --red: #e06c75;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid; grid-template-columns: 320px 1fr; height: 100vh;
+  }
+  /* ---- list pane ---- */
+  #list { border-right: 1px solid var(--line); overflow-y: auto; background: var(--panel); }
+  #list h1 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
+    margin: 0; padding: 16px; border-bottom: 1px solid var(--line); font-weight: 600;
+  }
+  .row {
+    padding: 10px 16px; border-bottom: 1px solid var(--line); cursor: pointer;
+    display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center;
+  }
+  .row:hover { background: var(--panel-2); }
+  .row.active { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--hero); }
+  .row .pos { font-weight: 700; color: var(--hero); font-size: 12px; }
+  .row .meta { color: var(--dim); font-size: 12px; }
+  .row .net { font-variant-numeric: tabular-nums; font-size: 12px; }
+  .pos-net { color: var(--good); } .neg-net { color: var(--bad); } .zero-net { color: var(--dim); }
+  #more { padding: 12px 16px; color: var(--dim); cursor: pointer; text-align: center; font-size: 12px; }
+  #more:hover { color: var(--text); }
+
+  /* ---- detail pane ---- */
+  #detail { overflow-y: auto; padding: 24px 28px 60px; }
+  .empty { color: var(--dim); margin-top: 20vh; text-align: center; }
+  h2 { margin: 0 0 4px; font-size: 20px; font-weight: 650; }
+  .sub { color: var(--dim); margin-bottom: 22px; font-size: 13px; }
+
+  .cards { display: inline-flex; gap: 4px; vertical-align: middle; }
+  .card {
+    display: inline-block; min-width: 26px; text-align: center; padding: 2px 5px;
+    background: #f4f4f6; color: #14161a; border-radius: 4px;
+    font: 600 13px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .card.red { color: #c0392b; }
+  .card.back { background: var(--panel-2); color: var(--dim); }
+
+  .street { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; overflow: hidden; }
+  .street > header {
+    display: flex; align-items: center; gap: 12px; padding: 9px 14px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  .street .name {
+    font-size: 11px; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--dim); font-weight: 700; min-width: 62px;
+  }
+  .street .pot { margin-left: auto; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .act {
+    display: grid; grid-template-columns: 52px 92px 1fr; gap: 10px;
+    padding: 6px 14px; border-top: 1px solid #23262d; align-items: baseline;
+  }
+  .act:first-of-type { border-top: 0; }
+  .act.hero { background: rgba(110,168,254,.07); }
+  .act .who { color: var(--dim); font-weight: 650; font-size: 12px; }
+  .act.hero .who { color: var(--hero); }
+  .act .what { font-weight: 600; }
+  .act .size { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 13px; }
+  .allin { color: var(--warn); font-weight: 700; font-size: 11px; letter-spacing: .05em; }
+
+  .dec { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 12px; background: var(--panel); }
+  .dec .head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+  .dec .st { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); font-weight: 700; }
+  .dec .action { font-weight: 650; font-size: 15px; }
+  .facts { display: flex; flex-wrap: wrap; gap: 8px; }
+  .fact {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 9px; font-size: 12px;
+  }
+  .fact b { color: var(--dim); font-weight: 600; margin-right: 5px; text-transform: uppercase; font-size: 10px; letter-spacing: .06em; }
+  .fact span { font-variant-numeric: tabular-nums; }
+
+  .gto { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 11px; }
+  .gto .label { font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); font-weight: 700; margin-bottom: 8px; }
+  .freq { display: grid; grid-template-columns: 60px 1fr 46px; gap: 9px; align-items: center; margin-bottom: 5px; font-size: 13px; }
+  .freq .bar { height: 7px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .freq .bar i { display: block; height: 100%; background: var(--hero); }
+  .freq .pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
+  .freq.taken .n { color: var(--good); font-weight: 650; }
+  .mixed { color: var(--warn); font-size: 11px; margin-top: 7px; }
+  .none { color: var(--dim); font-size: 12px; font-style: italic; }
+  .result { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; }
+  h3 { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); margin: 24px 0 10px; }
+
+  /* Below ~900px the fixed sidebar leaves too little for the detail pane: board
+     cards clip and bet sizings vanish off the right edge. Stack instead. */
+  @media (max-width: 900px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 40vh 1fr; height: 100vh; }
+    #list { border-right: 0; border-bottom: 1px solid var(--line); }
+    #detail { padding: 18px 16px 48px; }
+    /* Let the action rows reflow rather than hold three rigid columns. */
+    .act { grid-template-columns: 46px 76px 1fr; gap: 8px; padding: 6px 12px; }
+    .street > header { flex-wrap: wrap; gap: 8px; }
+    .street .pot { margin-left: 0; }
+    .freq { grid-template-columns: 52px 1fr 40px; }
+  }
+</style>
+</head>
+<body>
+  <div id="list"><h1>Hands</h1><div id="rows"></div><div id="more">load more</div></div>
+  <div id="detail"><div class="empty">Select a hand</div></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+let offset = 0, total = 0, active = null;
+
+const RED = new Set(["h", "d"]);
+const faces = (cs) => `<span class="cards">${cs.map(c =>
+  `<span class="card${RED.has(c[1]) ? " red" : ""}">${c[0]}${c[1]}</span>`).join("")}</span>`;
+
+// Two different absences, and they must not render the same way.
+// hole(): null means the cards exist but were never shown -> face-down.
+const hole = (cs) => cs && cs.length ? faces(cs)
+  : `<span class="cards"><span class="card back">??</span></span>`;
+// board(): empty means no cards are out yet (preflop) -> show nothing. A
+// face-down card here would imply a hidden board that does not exist.
+const board = (cs) => cs && cs.length ? faces(cs) : "";
+
+const bb = (n) => n === null || n === undefined ? "" : `${n}bb`;
+const netClass = (n) => n > 0 ? "pos-net" : n < 0 ? "neg-net" : "zero-net";
+
+async function loadList() {
+  const r = await fetch(`/api/hands?offset=${offset}&limit=60`).then(r => r.json());
+  total = r.total;
+  for (const row of r.rows) {
+    const el = document.createElement("div");
+    el.className = "row";
+    el.dataset.file = row.file;
+    if (row.error) {
+      el.innerHTML = `<div class="pos">!</div><div class="meta">${row.file}</div><div></div>`;
+    } else {
+      el.innerHTML = `
+        <div class="pos">${row.position}</div>
+        <div>${hole(row.hole_cards)}
+          <div class="meta">${row.street_reached} · ${row.eff_stack_bb}bb</div></div>
+        <div class="net ${netClass(row.hero_net_bb)}">${row.hero_net_bb > 0 ? "+" : ""}${row.hero_net_bb}</div>`;
+    }
+    el.onclick = () => open(row.file, el);
+    $("#rows").appendChild(el);
+  }
+  offset += r.rows.length;
+  $("#more").style.display = offset >= total ? "none" : "block";
+}
+
+async function open(file, el) {
+  if (active) active.classList.remove("active");
+  if (el) { active = el; el.classList.add("active"); }
+  // A hand gets its own URL, so a spot worth revisiting can be bookmarked or
+  // sent to someone rather than hunted for in the list again.
+  if (location.hash.slice(1) !== file) history.replaceState(null, "", "#" + file);
+  render(await fetch(`/api/hands/${file}`).then(r => r.json()));
+}
+
+function renderAction(a) {
+  let size = "";
+  if (a.action === "bet" || a.action === "raise") {
+    size = `to ${bb(a.to_bb)}` + (a.pct_pot ? ` · ${a.pct_pot}% pot` : "");
+  } else if (a.action === "call") {
+    size = bb(a.amount_bb);
+  }
+  return `<div class="act${a.is_hero ? " hero" : ""}">
+    <div class="who">${a.position}</div>
+    <div class="what">${a.action}</div>
+    <div class="size">${size}${a.is_all_in ? ' <span class="allin">ALL-IN</span>' : ""}</div>
+  </div>`;
+}
+
+function renderGto(d) {
+  if (!d.gto) {
+    return `<div class="gto"><div class="label">Equilibrium</div>
+      <div class="none">Not looked up — no chart for this spot.</div></div>`;
+  }
+  const rows = d.gto.actions.map(a => {
+    const taken = a.action === d.hero_action;
+    return `<div class="freq${taken ? " taken" : ""}">
+      <div class="n">${a.action}</div>
+      <div class="bar"><i style="width:${(a.frequency * 100).toFixed(0)}%"></i></div>
+      <div class="pct">${(a.frequency * 100).toFixed(0)}%</div></div>`;
+  }).join("");
+  // A genuinely mixed node means deviating is not a mistake. Saying so is the
+  // difference between a tool a player trusts and one they stop believing.
+  const mixed = d.gto.mixed
+    ? `<div class="mixed">Mixed strategy — more than one action is correct here.</div>` : "";
+  return `<div class="gto"><div class="label">Equilibrium · ${d.gto.source || d.gto.provider}</div>
+    ${rows}${mixed}</div>`;
+}
+
+function renderDecision(d) {
+  const f = [];
+  if (d.pot_odds !== null) f.push(["pot odds", `${(d.pot_odds * 100).toFixed(1)}%`]);
+  if (d.to_call_bb) f.push(["to call", bb(d.to_call_bb)]);
+  f.push(["pot", bb(d.pot_before_bb)]);
+  if (d.spr !== null) f.push(["SPR", d.spr]);
+  if (d.stack_before_bb !== null) f.push(["stack", bb(d.stack_before_bb)]);
+  if (d.facing) f.push(["facing", `${d.facing.position} ${d.facing.action} to ${bb(d.facing.to_bb)}`]);
+
+  const analysis = d.analysis
+    ? `<div class="gto"><div class="label">Analysis</div>${d.analysis.comment}</div>`
+    : `<div class="gto"><div class="label">Analysis</div>
+       <div class="none">Not analyzed yet.</div></div>`;
+
+  return `<div class="dec">
+    <div class="head"><span class="st">${d.street}</span>
+      <span class="action">${d.hero_action}${d.to_bb && d.hero_action !== "call" ? ` to ${bb(d.to_bb)}` : ""}</span>
+      ${board(d.board)}</div>
+    <div class="facts">${f.map(([k, v]) => `<div class="fact"><b>${k}</b><span>${v}</span></div>`).join("")}</div>
+    ${renderGto(d)}${analysis}</div>`;
+}
+
+function render(v) {
+  if (v.error) { $("#detail").innerHTML = `<div class="empty">${v.error}</div>`; return; }
+  const h = v.hand, r = v.result;
+  $("#detail").innerHTML = `
+    <h2>${h.hero.position} &nbsp;${hole(h.hero.hole_cards)}</h2>
+    <div class="sub">${h.site}/${h.site_hand_id} · ${h.stakes.label} · ${h.table.players_dealt}-handed ·
+      ${h.hero.eff_stack_bb}bb effective</div>
+    <h3>Action</h3>
+    ${v.streets.map(s => `<div class="street"><header>
+        <span class="name">${s.street}</span>${board(s.board)}
+        <span class="pot">pot ${bb(s.pot_start_bb)}</span></header>
+      ${s.actions.map(renderAction).join("")}</div>`).join("")}
+    <h3>Your decisions</h3>
+    ${v.hero_decisions.map(renderDecision).join("")}
+    <div class="result">Reached ${r.street_reached}${r.went_to_showdown ? ", showdown" : ""} ·
+      net <span class="${netClass(r.hero_net_bb)}">${r.hero_net_bb > 0 ? "+" : ""}${r.hero_net_bb}bb</span></div>`;
+  $("#detail").scrollTop = 0;
+}
+
+$("#more").onclick = loadList;
+
+// Deep link: #hand_00002.phh opens that hand directly, even if it is not on the
+// first page of the list.
+(async () => {
+  await loadList();
+  const want = decodeURIComponent(location.hash.slice(1));
+  if (want) open(want, $(`.row[data-file="${CSS.escape(want)}"]`));
+})();
+</script>
+</body>
+</html>

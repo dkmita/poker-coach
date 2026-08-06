@@ -79,3 +79,22 @@ def test_missing_root_is_not_an_error(tmp_path):
     p = ChartProvider(tmp_path / "nope")
     assert p.spot_keys == ()
     assert p.lookup("anything", "AdJs") is None
+
+
+def test_comments_are_stripped_per_line():
+    """A `#` comments out the rest of its line.
+
+    Regression: stripping `#`-prefixed *tokens* after splitting on whitespace
+    left the comment's remaining words as entries, and since unparseable entries
+    raise, one note at the top of an exported chart took the provider down.
+    """
+    r = parse_range("# GTO Wizard export -- not a real solve\nAA:1.0, KK  # trailing note\n")
+    assert r == {"AA": 1.0, "KK": 1.0}
+
+
+def test_underscore_files_are_ignored(tmp_path):
+    spot = tmp_path / "s"
+    spot.mkdir()
+    (spot / "call.txt").write_text("AA")
+    (spot / "_notes.txt").write_text("free text, not a range at all")
+    assert ChartProvider(tmp_path).spot_keys == ("s",)

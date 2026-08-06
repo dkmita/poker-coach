@@ -83,9 +83,15 @@ def parse_range(text: str) -> dict[str, float]:
     that silently drops half a range would show up later as a confidently wrong
     frequency, which is worse than a crash at load.
     """
+    # Strip comments per line, before tokenizing. Dropping `#`-prefixed *tokens*
+    # instead would leave the rest of the comment's words as garbage entries --
+    # and since unparseable entries raise, a single note at the top of an
+    # exported chart would take the whole provider down at startup.
+    body = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+
     weights: dict[str, float] = {}
-    for token in re.split(r"[,\s]+", text.strip()):
-        if not token or token.startswith("#"):
+    for token in re.split(r"[,\s]+", body.strip()):
+        if not token:
             continue
         m = _ENTRY.match(token)
         if m is None:
@@ -122,6 +128,13 @@ class ChartProvider:
             actions: dict[str, dict[str, float]] = {}
             for file in sorted(spot_dir.glob("*.txt")):
                 action = file.stem.lower()
+                # A leading underscore marks a file as not-a-strategy, so notes
+                # can live beside the ranges. Everything else must be a known
+                # action: the point of the check is catching `calls.txt` or
+                # `shove.txt`, which would otherwise vanish silently and leave a
+                # range quietly incomplete.
+                if action.startswith("_"):
+                    continue
                 if action not in KNOWN_ACTIONS:
                     raise ValueError(
                         f"{file}: unknown action {action!r}; expected one of "
