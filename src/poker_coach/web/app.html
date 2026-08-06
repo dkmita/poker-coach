@@ -122,6 +122,16 @@
   .priced .pos-net b { color: var(--good); }
   .priced .neg-net b { color: var(--bad); }
   .priced .hindsight { display: contents; }
+  /* A fact that can show its arithmetic. The marker is the only hint it opens,
+     so it stays visible rather than being hidden like the row chevrons. */
+  .fact.working { cursor: pointer; }
+  .fact.working > summary { display: flex; gap: 8px; align-items: baseline; list-style: none; }
+  .fact.working > summary::after { content: "?"; color: var(--dim); font-size: 10px; }
+  .fact.working > summary::-webkit-details-marker { display: none; }
+  .fact.working > .work {
+    margin-top: 6px; color: var(--dim); font-size: 11px; line-height: 1.5;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
   .priced .work {
     flex-basis: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 10.5px; opacity: .75;
@@ -381,7 +391,11 @@ async function loadList() {
     $("#rows").innerHTML = ""; offset = 0; listMode = "hands"; lastDay = null;
   }
   $("#filters").style.display = "flex";
-  const r = await fetch(`/api/hands?offset=${offset}&limit=60&filter=${filterKind}`)
+  // The server groups by *local* day, so it needs the offset: this archive is
+  // one UTC day that reads locally as two sessions.
+  const tz = -new Date().getTimezoneOffset();
+  const r = await fetch(
+      `/api/hands?offset=${offset}&limit=60&filter=${filterKind}&tz=${tz}`)
     .then(r => r.json());
   const LABEL = { flagged: "Preflop", interesting: "Interesting", terminal: "Terminal" };
   for (const [k, n] of Object.entries(r.counts || {})) {
@@ -534,17 +548,28 @@ function renderAction(a, d) {
 }
 
 function decisionFacts(d) {
+  // [label, value, working] -- a fact with working is clickable and shows it.
   const f = [];
-  if (d.pot_odds !== null) f.push(["pot odds", `${(d.pot_odds * 100).toFixed(1)}%`]);
+  if (d.pot_odds !== null) {
+    f.push(["pot odds", `${(d.pot_odds * 100).toFixed(1)}%`, d.pot_odds_working]);
+  }
   if (d.to_call_bb) f.push(["to call", bb(d.to_call_bb)]);
-  f.push(["pot", bb(d.pot_before_bb)]);
+  // The pot on the table. Where part of it is more than hero can cover, the
+  // contestable figure is the one the odds used, so show both rather than
+  // leaving the arithmetic looking like it used the wrong number.
+  f.push(["pot", d.pot_effective_bb < d.pot_before_bb
+    ? `${bb(d.pot_before_bb)} · ${bb(d.pot_effective_bb)} contestable`
+    : bb(d.pot_before_bb)]);
   if (d.spr !== null) f.push(["SPR", d.spr]);
   if (d.stack_before_bb !== null) f.push(["stack", bb(d.stack_before_bb)]);
   if (d.facing) {
     f.push(["facing", `${d.facing.position} ${d.facing.action} to ${bb(d.facing.to_bb)}${
       d.facing.all_in ? " all-in" : ""}`]);
   }
-  return f.map(([k, v]) => `<div class="fact"><b>${k}</b><span>${v}</span></div>`).join("");
+  return f.map(([k, v, work]) => work
+    ? `<details class="fact working"><summary><b>${k}</b><span>${v}</span></summary>
+         <div class="work">${esc(work)}</div></details>`
+    : `<div class="fact"><b>${k}</b><span>${v}</span></div>`).join("");
 }
 
 function renderAnalysis(d) {

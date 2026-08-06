@@ -21,6 +21,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import tomllib
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -56,6 +58,58 @@ class Archive:
             p.name: p for p in sorted(root.glob("*.phh"))
         }
         self._index: dict[str, list[str]] = {}
+        self._order: dict[int, list[str]] = {}
+        self._played: dict[str, datetime] = {}
+
+    def played_at(self, name: str) -> datetime:
+        """When the hand was dealt, in UTC, read straight from the TOML.
+
+        Not via `handview` on purpose: ordering the list must not cost a replay
+        of the whole archive, and the timestamp is four scalar fields sitting at
+        the top of the file. Epoch for a hand that carries no date, which sorts
+        it to the end rather than guessing.
+        """
+        if name not in self._played:
+            try:
+                raw = tomllib.loads(self.files[name].read_text())
+            except (OSError, tomllib.TOMLDecodeError):
+                raw = {}
+            y, m, d = raw.get("year"), raw.get("month"), raw.get("day")
+            t = raw.get("time")
+            self._played[name] = (
+                datetime(y, m, d, getattr(t, "hour", 0), getattr(t, "minute", 0),
+                         getattr(t, "second", 0), tzinfo=UTC)
+                if y and m and d
+                else datetime(1970, 1, 1, tzinfo=UTC)
+            )
+        return self._played[name]
+
+    def ordered(self, tz_offset: int) -> list[str]:
+        """File names newest *day* first, but in playing order within a day.
+
+        Which is how a session reads: you want last night's hands before last
+        week's, and within last night you want to follow the table forward, not
+        watch it run backwards.
+
+        The day boundary is the player's, not UTC's -- `tz_offset` is minutes
+        east of UTC, sent by the browser. This sample is a single UTC day that
+        locally is Wednesday evening and Thursday morning, so grouping on UTC
+        would collapse the two sessions into one. A session spanning a DST
+        change would use the wrong boundary by an hour; nothing here does.
+        """
+        if tz_offset not in self._order:
+            shift = timedelta(minutes=tz_offset)
+            self._order[tz_offset] = sorted(
+                self.files,
+                key=lambda n: (
+                    # Negated so later days come first while the timestamp
+                    # inside a day still sorts ascending.
+                    -(self.played_at(n) + shift).date().toordinal(),
+                    self.played_at(n),
+                    n,
+                ),
+            )
+        return self._order[tz_offset]
 
     def view(self, name: str) -> dict | None:
         path = self.files.get(name)
@@ -73,7 +127,7 @@ class Archive:
         view["file"] = name
         return view
 
-    def filtered(self, kind: str) -> list[str]:
+    def filtered(self, kind: str, tz_offset: int = 0) -> list[str]:
         """Files matching a review filter.
 
         Filtering has to happen before pagination or the count is a lie -- a page
@@ -82,10 +136,11 @@ class Archive:
         built only when a filter is actually used.
         """
         if kind not in self._index:
-            self._index[kind] = [
+            self._index[kind] = {
                 name for name in self.files if self._matches(kind, self._build(name))
-            ]
-        return self._index[kind]
+            }
+        keep = self._index[kind]
+        return [n for n in self.ordered(tz_offset) if n in keep]
 
     def _matches(self, kind: str, view: dict | None) -> bool:
         if not view or "error" in view:
@@ -110,13 +165,17 @@ class Archive:
             if d["street"] == "preflop" and (d.get("verdict") or {}).get("tone") == "bad"
         ]
 
-    def summaries(self, offset: int, limit: int, *, kind: str = "all") -> dict:
+    def summaries(
+        self, offset: int, limit: int, *, kind: str = "all", tz_offset: int = 0
+    ) -> dict:
         """Lightweight rows for the list pane.
 
         Built per page rather than for the whole archive at startup: a 2000-hand
         corpus would cost a few seconds of replay to show fifty rows.
         """
-        source = list(self.files) if kind == "all" else self.filtered(kind)
+        source = (
+            self.ordered(tz_offset) if kind == "all" else self.filtered(kind, tz_offset)
+        )
         rows = []
         for name in source[offset : offset + limit]:
             # The same cached view the detail pane uses. Building it here costs a
@@ -221,7 +280,13 @@ def make_handler(archive: Archive):
                 kind = query.get("filter", ["all"])[0]
                 if kind not in FILTERS:
                     kind = "all"
-                self._json(archive.summaries(offset, limit, kind=kind))
+                # Minutes east of UTC, from the browser. Clamped to the real
+                # range so a bad value cannot shift a hand into another week.
+                try:
+                    tz = max(-720, min(840, int(query.get("tz", ["0"])[0])))
+                except ValueError:
+                    tz = 0
+                self._json(archive.summaries(offset, limit, kind=kind, tz_offset=tz))
                 return
 
             if url.path == "/api/charts":

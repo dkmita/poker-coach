@@ -356,6 +356,23 @@ def _walk(
 
         to_call: Cents = st.to_call
         pot_before: Cents = st.pot
+        # What this player can actually win. A bet larger than they can match is
+        # returned to the bettor, so counting it flatters the price: on hand
+        # 2794084838 the big blind shoved 20c more than hero had behind, and
+        # pricing hero's call against the whole 2000c pot rather than the 1980c
+        # that was ever contested read 24.6% where the truth is 24.9%. Every
+        # opponent's stake is capped at what this player will have in after
+        # calling; their own earlier money is under that cap by construction.
+        contributed = [
+            int(x) - st.stacks[i] for i, x in enumerate(hh.starting_stacks)
+        ]
+        if to_call > 0:
+            after_call = contributed[seat] + to_call
+            pot_effective: Cents = contributed[seat] + sum(
+                min(c, after_call) for i, c in enumerate(contributed) if i != seat
+            )
+        else:
+            pot_effective = pot_before
         stack_before: Cents = st.stacks[seat]
         board = st.board
 
@@ -391,6 +408,10 @@ def _walk(
             "to_bb": _bb(to_amount, bb),
             "pot_before_cents": pot_before,
             "pot_before_bb": _bb(pot_before, bb),
+            # The contestable share of it -- equal to `pot_before` unless someone
+            # bet more than this player can cover.
+            "pot_effective_cents": pot_effective,
+            "pot_effective_bb": _bb(pot_effective, bb),
             # How big the bet was relative to the pot -- how a human reads a
             # postflop sizing. Suppressed preflop, where raises are conventionally
             # described as a multiple of the blind ("2.5x"), never as a fraction
@@ -426,8 +447,8 @@ def _walk(
         if seat == hero:
             hero_last_street = street
             hero_decisions.append(
-                _decision(entry, street, bb, to_call, pot_before, stack_before, board,
-                          last_aggressor)
+                _decision(entry, street, bb, to_call, pot_before, pot_effective,
+                          stack_before, board, last_aggressor)
             )
 
         if kind.is_aggressive:
@@ -531,11 +552,14 @@ def _decision(
     bb: Cents,
     to_call: Cents,
     pot_before: Cents,
+    pot_effective: Cents,
     stack_before: Cents,
     board: str,
     last_aggressor: dict | None,
 ) -> dict:
-    pot_odds = to_call / (pot_before + to_call) if to_call > 0 else None
+    # Priced against the contestable pot, not the pot on the table: money nobody
+    # can call is money nobody can win, and it is returned at the end.
+    pot_odds = to_call / (pot_effective + to_call) if to_call > 0 else None
     return {
         "action_index": entry["action_index"],
         "street": street.value,
@@ -546,10 +570,15 @@ def _decision(
         "amount_bb": entry["amount_bb"],
         "to_bb": entry["to_bb"],
         "pot_before_bb": _bb(pot_before, bb),
+        "pot_effective_bb": _bb(pot_effective, bb),
         "to_call_bb": _bb(to_call, bb),
         "pct_pot": entry["pct_pot"],
         # Undefined facing a check, which is why it's nullable rather than 0.
         "pot_odds": round(pot_odds, 3) if pot_odds is not None else None,
+        # The same number with its working shown. A percentage you cannot check
+        # is a percentage you have to take on faith, and this one has a
+        # correction in it often enough to be worth reading.
+        "pot_odds_working": _pot_odds_working(to_call, pot_before, pot_effective, bb),
         # Stack-to-pot ratio: how deep the remaining play is relative to what is
         # already contested, and the standard shorthand for how committed a
         # postflop pot is. Deliberately null preflop -- it is arithmetically
@@ -577,6 +606,24 @@ def _decision(
         # Slot for the analyze stage's judgment.
         "analysis": None,
     }
+
+
+def _pot_odds_working(
+    to_call: Cents, pot_before: Cents, pot_effective: Cents, bb: Cents
+) -> str | None:
+    """Human-readable derivation of the pot odds, or None facing a check."""
+    if to_call <= 0:
+        return None
+    call, pot = _bb(to_call, bb), _bb(pot_effective, bb)
+    pct = to_call / (pot_effective + to_call)
+    line = f"{call} / ({pot} + {call}) = {pct:.1%}"
+    if pot_effective < pot_before:
+        dead = _bb(pot_before - pot_effective, bb)
+        line += (
+            f" — {dead}bb of the {_bb(pot_before, bb)}bb pot is more than you can "
+            f"cover, so it is returned rather than won and is left out"
+        )
+    return line
 
 
 def _spot_key(
@@ -733,12 +780,12 @@ def _attach_price(streets: list[dict], hh: HandHistory, players: int) -> None:
                 # so nothing to hide when the opponent is hero.
                 "villain_seat": seat,
                 "villain_is_hero": shown_hero == seat,
-                "pot_bb": a["pot_before_bb"],
+                "pot_bb": a["pot_effective_bb"],
                 "call_bb": call,
                 "equity": round(eq.equity, 4),
                 "runouts": eq.runouts,
                 "exact": eq.exact,
-                **price_call(a["pot_before_bb"], call, eq.equity),
+                **price_call(a["pot_effective_bb"], call, eq.equity),
             }
 
 
