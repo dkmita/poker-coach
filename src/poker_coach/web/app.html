@@ -611,7 +611,7 @@ function render(v) {
     <h3>Action</h3>
     ${v.streets.map(s => `<div class="street"><header>
         <span class="name">${s.street}</span>
-        <span class="pot">${s.pot_start_bb === null ? "run out" : "pot " + bb(s.pot_start_bb)}</span>
+        <span class="pot">${bb(s.pot_start_bb)}</span>
         ${board(s.board)}</header>
       ${s.actions.map(a => renderAction(a, byIndex.get(a.action_index))).join("")}</div>`).join("")}
     ${renderOutcome(v)}`;

@@ -332,6 +332,9 @@ def _walk(
     current_street: Street | None = None
     raises_this_street = 0
     folded: set[int] = set()
+    # The pot after the most recent action, so a street nobody acted on can still
+    # report one. Everyone being all-in does not make the money disappear.
+    pot_after: Cents = 0
 
     # Pairing each action with the state it faced is `replay`'s job, not this
     # module's. An earlier copy of that logic lived here, indexing `hh.actions`
@@ -405,6 +408,7 @@ def _walk(
             },
         )
         bucket["actions"].append(entry)
+        pot_after = pot_before + amount
 
         # After the entry is built, not before: `_terminal` asks who was still
         # live when this player had to act, and that includes them.
@@ -443,8 +447,11 @@ def _walk(
             streets[st] = {
                 "street": st.value,
                 "board": [full[i : i + 2] for i in range(0, len(full), 2)],
-                "pot_start_cents": None,
-                "pot_start_bb": None,
+                # Carried from the last action: nobody could act, so nothing
+                # changed. `runout` is what marks the street as unplayed --
+                # a null pot said "unknown" when the figure is known exactly.
+                "pot_start_cents": pot_after,
+                "pot_start_bb": _bb(pot_after, bb),
                 "actions": [],
                 "runout": True,
             }
