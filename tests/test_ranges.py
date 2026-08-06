@@ -57,9 +57,15 @@ def test_missing_fold_is_inferred_as_the_remainder(charts):
     assert s2.frequency_of("call") == pytest.approx(1.0)
 
 
-def test_hand_absent_from_every_action_returns_none(charts):
-    """Charted spot, but this hand never reaches it — not a strategy."""
-    assert charts.lookup("BB_preflop_vs_UTG_raise_2.5bb_100bb", "7h2c") is None
+def test_hand_absent_from_every_action_folds(charts):
+    """A published chart colours all 169 cells; uncoloured means fold.
+
+    Treating absence as "no answer" withheld a verdict from every hand the chart
+    simply folds, which is most of them.
+    """
+    s = charts.lookup("BB_preflop_vs_UTG_raise_2.5bb_100bb", "7h2c")
+    assert s is not None
+    assert s.frequency_of("fold") == 1.0
 
 
 def test_uncharted_spot_returns_none(charts):

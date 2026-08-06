@@ -177,6 +177,11 @@ def _showdown(hh: HandHistory, bb: Cents, hero: int, players: int) -> dict:
     ]
     best = max(nets) if nets else 0
 
+    # Only players who were actually in the hand. A seat that folded for free
+    # has nothing to report, and four rows of "0bb" bury the two that matter.
+    def took_part(i: int) -> bool:
+        return nets[i] != 0 or i in showed
+
     return {
         "board": [board[i : i + 2] for i in range(0, len(board), 2)],
         "went_to_showdown": bool(showed),
@@ -197,6 +202,7 @@ def _showdown(hh: HandHistory, bb: Cents, hero: int, players: int) -> dict:
                 "won": nets[i] > 0 and nets[i] == best,
             }
             for i in range(players)
+            if took_part(i)
         ],
     }
 
@@ -253,6 +259,7 @@ def _walk(
     # was actually facing rather than just a number.
     last_aggressor: dict[str, Any] | None = None
     current_street: Street | None = None
+    raises_this_street = 0
 
     for idx, (state, _stale) in enumerate(hh.state_actions):
         if idx >= len(hh.actions):
@@ -267,6 +274,7 @@ def _walk(
         if street is not current_street:
             last_aggressor = None
             current_street = street
+            raises_this_street = 0
 
         to_call: Cents = int(state.checking_or_calling_amount or 0)
         committed: Cents = int(state.bets[seat])
@@ -330,9 +338,17 @@ def _walk(
             )
 
         if kind.is_aggressive:
+            raises_this_street += 1
+            # Preflop, the big blind is already a bet, so the first voluntary
+            # raise is the open, the second is a 3-bet, the third a 4-bet.
+            # Calling them all "raise" makes every 3-bet spot look like an
+            # open-raise spot and no 3-bet chart can ever match.
+            escalation = ("raise", "3bet", "4bet", "5bet")
+            level = min(raises_this_street - 1, len(escalation) - 1)
             last_aggressor = {
                 "position": entry["position"],
                 "action": kind.value,
+                "level": escalation[level] if street is Street.PREFLOP else kind.value,
                 "to_bb": entry["to_bb"],
                 "pct_pot": entry["pct_pot"],
             }
@@ -425,7 +441,9 @@ def _spot_key(
     if facing is None:
         parts.append("unopened")
     else:
-        parts.append(f"vs_{facing['position']}_{facing['action']}_{facing['to_bb']}bb")
+        parts.append(
+            f"vs_{facing['position']}_{facing.get('level', facing['action'])}_{facing['to_bb']}bb"
+        )
     parts.append(f"{depth}bb")
     return "_".join(str(p) for p in parts)
 
@@ -513,3 +531,39 @@ def _attach_gto(
             solution = None
         if solution is not None:
             d["gto"] = solution.as_fact()
+            d["verdict"] = _verdict(d["hero_action"], solution)
+
+
+# How often the chart has to take an action before we call it standard. Below
+# the upper bound it is still part of the strategy -- deviating at a mixed node
+# is not an error, and flagging it as one is how a tool loses a player's trust.
+_STANDARD = 0.50
+_IN_MIX = 0.05
+
+
+def _verdict(hero_action: str, solution) -> dict:
+    """Chart-derived judgement of one action. Deterministic, no model involved.
+
+    Only as good as the chart behind it, so it carries the spot it consulted --
+    the UI links to that chart, because a verdict you cannot check is worth less
+    than no verdict.
+    """
+    freq = solution.frequency_of(hero_action) or 0.0
+    if freq >= _STANDARD:
+        label, tone = "standard", "good"
+    elif freq >= _IN_MIX:
+        label, tone = "in the mix", "ok"
+    else:
+        # The chart never takes this action with this hand. Sizing is ignored --
+        # these charts are not published per size -- so this is a judgement about
+        # the *choice*, not how much.
+        best = solution.best
+        label = f"off chart — {best.action}s here" if best else "off chart"
+        tone = "bad"
+    return {
+        "label": label,
+        "tone": tone,
+        "frequency": round(freq, 3),
+        "chart": solution.spot_key,
+        "source": solution.provider,
+    }

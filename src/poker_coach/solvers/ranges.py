@@ -190,6 +190,7 @@ class ChartProvider:
 
     # "BB_preflop_vs_UTG_raise_2.5bb_100bb" -> "BB_preflop_vs_UTG_raise_100bb"
     _SIZE = re.compile(r"^(?P<head>.*)_[\d.]+bb(?P<depth>_\d+bb)$")
+    _DEPTH = re.compile(r"^(?P<head>.*)_(?P<depth>\d+)bb$")
 
     def resolve(self, spot_key: str) -> str | None:
         """The charted spot answering for `spot_key`, if any.
@@ -207,7 +208,22 @@ class ChartProvider:
             generic = m["head"] + m["depth"]
             if generic in self._spots:
                 return generic
-        return None
+            spot_key = generic
+
+        # Fall back on stack depth. Charts are published at a depth, not per
+        # stack -- this pack is 100bb and states it applies from roughly 50bb up
+        # -- so a 175bb spot should still consult the 100bb chart rather than
+        # silently having no reference at all. Nearest charted depth wins.
+        m = self._DEPTH.match(spot_key)
+        if not m:
+            return None
+        want, head = int(m["depth"]), m["head"]
+        candidates = []
+        for key in self._spots:
+            k = self._DEPTH.match(key)
+            if k and k["head"] == head:
+                candidates.append((abs(int(k["depth"]) - want), int(k["depth"]), key))
+        return min(candidates)[2] if candidates else None
 
     def lookup(self, spot_key: str, hand: str) -> Solution | None:
         resolved = self.resolve(spot_key)
@@ -220,12 +236,16 @@ class ChartProvider:
         freqs = {a: w.get(klass, 0.0) for a, w in actions.items()}
         total = sum(freqs.values())
         if total <= 0:
-            # The spot is charted but this hand appears in none of its action
-            # ranges, which means the hand never reaches this node. That is a
-            # real answer, not a missing one -- but it is not a strategy, so
-            # return nothing rather than an all-zero Solution a UI would render
-            # as "equilibrium folds 0%".
-            return None
+            # Absent from every action range means fold. A published chart
+            # colours all 169 cells and the uncoloured ones are the fold region,
+            # so absence is a statement, not a gap. Returning None here instead
+            # withheld a verdict from 37 of 50 real preflop decisions -- every
+            # hand the charts simply fold.
+            return Solution(
+                spot_key=spot_key, hand=klass, provider=self.name,
+                source=self.source,
+                actions=(ActionFrequency(action="fold", frequency=1.0),),
+            )
 
         # An absent fold.txt is the common case: exports usually cover only the
         # continuing actions, and folding is the remainder.

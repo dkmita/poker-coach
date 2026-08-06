@@ -120,6 +120,15 @@
   .dec .head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
   .dec .st { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); font-weight: 700; }
   .dec .action { font-weight: 650; font-size: 15px; }
+  .verdict {
+    margin-left: auto; text-decoration: none; border-radius: 999px;
+    padding: 3px 11px; font-size: 11px; font-weight: 650; border: 1px solid;
+  }
+  .verdict em { font-style: normal; opacity: .65; margin-left: 6px; font-variant-numeric: tabular-nums; }
+  .verdict.good { color: var(--good); border-color: rgba(95,184,122,.4); background: rgba(95,184,122,.10); }
+  .verdict.ok   { color: var(--warn); border-color: rgba(216,166,87,.4);  background: rgba(216,166,87,.10); }
+  .verdict.bad  { color: var(--bad);  border-color: rgba(224,108,117,.4); background: rgba(224,108,117,.12); }
+  .verdict:hover { filter: brightness(1.25); }
   .facts { display: flex; flex-wrap: wrap; gap: 8px; }
   .fact {
     background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
@@ -248,6 +257,16 @@ function renderGto(d) {
     ${rows}${mixed}</div>`;
 }
 
+function renderVerdict(d) {
+  if (!d.verdict) return "";
+  const v = d.verdict;
+  // The chart is a link, not a citation: a verdict you cannot check is worth
+  // less than no verdict.
+  return `<a class="verdict ${v.tone}" href="#chart:${v.chart}"
+    title="from ${v.chart.replace(/_/g," ")}">${v.label}
+    <em>${(v.frequency * 100).toFixed(0)}%</em></a>`;
+}
+
 function renderDecision(d) {
   const f = [];
   if (d.pot_odds !== null) f.push(["pot odds", `${(d.pot_odds * 100).toFixed(1)}%`]);
@@ -265,7 +284,7 @@ function renderDecision(d) {
   return `<div class="dec">
     <div class="head"><span class="st">${d.street}</span>
       <span class="action">${d.hero_action}${d.to_bb && d.hero_action !== "call" ? ` to ${bb(d.to_bb)}` : ""}</span>
-      ${board(d.board)}</div>
+      ${board(d.board)}${renderVerdict(d)}</div>
     <div class="facts">${f.map(([k, v]) => `<div class="fact"><b>${k}</b><span>${v}</span></div>`).join("")}</div>
     ${renderGto(d)}${analysis}</div>`;
 }
