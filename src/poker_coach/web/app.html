@@ -297,11 +297,11 @@ function render(v) {
     <h3>Action</h3>
     ${v.streets.map(s => `<div class="street"><header>
         <span class="name">${s.street}</span>${board(s.board)}
-        <span class="pot">pot ${bb(s.pot_start_bb)}</span></header>
+        <span class="pot">${s.pot_start_bb === null ? "run out" : "pot " + bb(s.pot_start_bb)}</span></header>
       ${s.actions.map(renderAction).join("")}</div>`).join("")}
+    ${renderOutcome(v)}
     <h3>Your decisions</h3>
     ${v.hero_decisions.map(renderDecision).join("")}
-    ${renderOutcome(v)}
     <div class="result">You were out on <b>${r.hero_street_reached}</b>${r.hero_went_to_showdown ? ", at showdown" : ""} ·
       net <span class="${netClass(r.hero_net_bb)}">${r.hero_net_bb > 0 ? "+" : ""}${r.hero_net_bb}bb</span>${
         r.hero_street_reached !== r.street_reached
