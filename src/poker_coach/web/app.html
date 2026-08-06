@@ -122,10 +122,25 @@
   .priced .pos-net b { color: var(--good); }
   .priced .neg-net b { color: var(--bad); }
   .priced .hindsight { display: contents; }
-  /* A fact whose arithmetic is one hover away. The dotted underline is the only
-     thing saying so, so it stays even though the tooltip itself is the browser's. */
-  .fact.hint { cursor: help; }
-  .fact.hint b { text-decoration: underline dotted var(--line); text-underline-offset: 3px; }
+  /* A fact whose arithmetic is one hover away. Drawn here rather than left to
+     the browser's `title`: that waits about a second, renders at caption size,
+     and wraps a sentence badly -- and when it silently does not appear there is
+     nothing to inspect. This shows immediately and is a real element. */
+  .hint { position: relative; cursor: help; }
+  .hint b { text-decoration: underline dotted var(--line); text-underline-offset: 3px; }
+  .hint::after {
+    content: attr(data-tip);
+    position: absolute; left: 0; top: calc(100% + 6px); z-index: 40;
+    width: max-content; max-width: 330px;
+    background: #0f1115; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+    font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: normal; text-transform: none; letter-spacing: 0;
+    box-shadow: 0 12px 30px rgba(0,0,0,.55);
+    opacity: 0; visibility: hidden; transition: opacity .12s ease;
+    pointer-events: none;
+  }
+  .hint:hover::after { opacity: 1; visibility: visible; }
   .priced .work {
     flex-basis: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 10.5px; opacity: .75;
@@ -563,7 +578,7 @@ function decisionFacts(d) {
       d.facing.all_in ? " all-in" : ""}`]);
   }
   return f.map(([k, v, work]) => work
-    ? `<div class="fact hint" title="${esc(work)}"><b>${k}</b><span>${v}</span></div>`
+    ? `<div class="fact hint" data-tip="${esc(work)}"><b>${k}</b><span>${v}</span></div>`
     : `<div class="fact"><b>${k}</b><span>${v}</span></div>`).join("");
 }
 
