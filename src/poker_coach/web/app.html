@@ -280,8 +280,7 @@ async function loadList() {
           ${off.length ? `<div class="flag" title="${off.join(" · ")}">${
             off.length > 1 ? `${off.length} preflop` : "preflop"}</div>` : ""}${
             (row.interest || []).length ? `<div class="flag note" title="${
-              row.interest.join(" · ")}">${row.interest.slice(0, 2).join(" · ")}${
-              row.interest.length > 2 ? ` +${row.interest.length - 2} more` : ""}</div>` : ""}</div>
+              row.interest.join(" · ")}">${row.interest[0]}</div>` : ""}</div>
         <div class="net ${netClass(row.hero_net_bb)}">${row.hero_net_bb > 0 ? "+" : ""}${row.hero_net_bb}</div>`;
     }
     el.onclick = () => open(row.file, el);
