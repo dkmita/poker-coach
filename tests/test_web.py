@@ -110,3 +110,33 @@ def test_clean_hands_carry_an_empty_flag_list(server):
     """Present-and-empty, so the client can rely on the key existing."""
     row = get(server, "/api/hands")["rows"][0]
     assert isinstance(row["preflop_off_chart"], list)
+
+
+def test_flagged_filter_applies_before_pagination(server):
+    """Filtering the loaded page would report a count that isn't the archive's."""
+    all_hands = get(server, "/api/hands")
+    flagged = get(server, "/api/hands?flagged=1")
+    assert flagged["archive_total"] == all_hands["total"]
+    assert flagged["total"] == len(flagged["rows"])
+    assert all(r["preflop_off_chart"] for r in flagged["rows"])
+
+
+def test_flagged_total_is_null_until_the_filter_is_used(tmp_path):
+    """Counting means replaying the whole archive, so the first page load
+    must not pay for it."""
+    from http.server import ThreadingHTTPServer
+    from threading import Thread
+
+    from poker_coach.web.server import Archive, make_handler
+
+    d = tmp_path / "a"
+    d.mkdir()
+    (d / "h.phh").write_text(HAND)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Archive(d, ChartProvider(tmp_path))))
+    Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_port}"
+    try:
+        assert get(base, "/api/hands")["flagged_total"] is None
+        assert get(base, "/api/hands?flagged=1")["flagged_total"] == 0
+    finally:
+        httpd.shutdown()

@@ -19,6 +19,15 @@
   }
   /* ---- list pane ---- */
   #list { border-right: 1px solid var(--line); overflow-y: auto; background: var(--panel); }
+  #filters { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .filt {
+    background: none; border: 1px solid var(--line); border-radius: 999px;
+    color: var(--dim); cursor: pointer; padding: 4px 12px; font: inherit; font-size: 11px;
+    font-weight: 650;
+  }
+  .filt:hover { color: var(--text); }
+  .filt.on { color: var(--bad); border-color: rgba(224,108,117,.5); background: rgba(224,108,117,.12); }
+  .filt[data-f="all"].on { color: var(--text); border-color: var(--dim); background: var(--panel-2); }
   #tabs { display: flex; border-bottom: 1px solid var(--line); }
   .tab {
     flex: 1; background: none; border: 0; color: var(--dim); cursor: pointer;
@@ -182,6 +191,7 @@
 <body>
   <div id="list">
     <div id="tabs"><button class="tab on" data-tab="hands">Hands</button><button class="tab" data-tab="charts">Charts</button></div>
+    <div id="filters"><button class="filt on" data-f="all">All</button><button class="filt" data-f="flagged">To review</button></div>
     <div id="rows"></div><div id="more">load more</div>
   </div>
   <div id="detail"><div class="empty">Select a hand</div></div>
@@ -193,6 +203,10 @@ let offset = 0, total = 0, active = null;
 // (it paginates), so anything that switches modes has to clear first -- browser
 // Back out of a chart used to leave the chart rows sitting there.
 let listMode = null;
+// "To review" shows only hands with an off-chart preflop action. Filtering is
+// server-side and applied before pagination -- filtering the loaded page would
+// report a count that is not the archive's.
+let onlyFlagged = false;
 // 9-handed-only charts are reference material for a game you don't play.
 let showRef = false;
 
@@ -212,7 +226,16 @@ const netClass = (n) => n > 0 ? "pos-net" : n < 0 ? "neg-net" : "zero-net";
 
 async function loadList() {
   if (listMode !== "hands") { $("#rows").innerHTML = ""; offset = 0; listMode = "hands"; }
-  const r = await fetch(`/api/hands?offset=${offset}&limit=60`).then(r => r.json());
+  $("#filters").style.display = "flex";
+  const r = await fetch(
+    `/api/hands?offset=${offset}&limit=60${onlyFlagged ? "&flagged=1" : ""}`
+  ).then(r => r.json());
+  if (r.flagged_total !== null && r.flagged_total !== undefined) {
+    $(`.filt[data-f="flagged"]`).textContent = `To review (${r.flagged_total})`;
+  }
+  if (onlyFlagged && !r.rows.length && !offset) {
+    $("#rows").innerHTML = `<div class="row"><div></div><div class="meta">No off-chart preflop actions.</div><div></div></div>`;
+  }
   total = r.total;
   for (const row of r.rows) {
     const el = document.createElement("div");
@@ -359,6 +382,7 @@ const RANKS13 = "AKQJT98765432".split("");
 async function loadCharts() {
   const r = await fetch("/api/charts").then(r => r.json());
   listMode = "charts";
+  $("#filters").style.display = "none";
   $("#rows").innerHTML = "";
   $("#more").style.display = "none";
   if (!r.spots.length) {
@@ -473,6 +497,15 @@ document.querySelectorAll(".tab").forEach(t => {
     history.replaceState(null, "", "#");
     if (t.dataset.tab === "charts") loadCharts();
     else loadList();
+  };
+});
+
+document.querySelectorAll(".filt").forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll(".filt").forEach(x => x.classList.toggle("on", x === b));
+    onlyFlagged = b.dataset.f === "flagged";
+    listMode = null;          // force the list to rebuild from the top
+    loadList();
   };
 });
 
