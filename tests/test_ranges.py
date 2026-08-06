@@ -98,3 +98,19 @@ def test_underscore_files_are_ignored(tmp_path):
     (spot / "call.txt").write_text("AA")
     (spot / "_notes.txt").write_text("free text, not a range at all")
     assert ChartProvider(tmp_path).spot_keys == ("s",)
+
+
+def test_grid_uses_canonical_class_names(charts):
+    """Regression: building names off the ascending RANKS string produced '27s'
+    where the canonical class is '72s', so every off-diagonal cell missed."""
+    g = charts.grid("BB_preflop_vs_UTG_raise_2.5bb_100bb")
+    assert len(g) == 169
+    for name in ("AA", "72o", "72s", "AKo", "AKs", "22"):
+        assert name in g, name
+    assert "27s" not in g and "KAo" not in g
+
+
+def test_grid_fills_the_fold_remainder(charts):
+    g = charts.grid("BB_preflop_vs_UTG_raise_2.5bb_100bb")
+    assert g["72o"] == {"fold": 1.0}
+    assert abs(sum(g["AJo"].values()) - 1.0) < 1e-9

@@ -15,3 +15,8 @@ archive/
 # and this repo is public. Anonymized fixtures live in tests/ and are committed;
 # raw captures stay here and are not.
 samples/
+
+# Extracted solver/coaching charts. These derive from paid third-party material
+# (a PokerCoaching PDF); extracting them for personal study is fine, publishing
+# them in a public repo is redistribution. Regenerate locally from your own copy.
+charts/

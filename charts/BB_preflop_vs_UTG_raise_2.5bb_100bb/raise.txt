@@ -1,2 +1,0 @@
-# ILLUSTRATIVE ONLY -- not a real solve. Replace with a GTO Wizard export.
-QQ+, AKs, AKo, A5s:0.5, AJo:0.18

@@ -1,2 +1,0 @@
-# ILLUSTRATIVE ONLY -- not a real solve. Replace with a GTO Wizard export.
-22+, A2s+, K7s+, Q9s+, J9s+, T9s, 98s, 87s, ATo:0.9, AJo:0.82, KQo:0.7, KJo:0.4

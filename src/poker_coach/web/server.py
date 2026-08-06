@@ -37,6 +37,8 @@ APP_HTML = Path(__file__).with_name("app.html")
 # sanitizing a path, names are matched against this and then looked up in the
 # scanned file list -- a name that isn't already known is never touched.
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+# Spot keys carry '+' (UTG+1) but must never carry a path separator.
+_SAFE_SPOT = re.compile(r"^[A-Za-z0-9._+-]+$")
 
 
 class Archive:
@@ -117,6 +119,24 @@ def make_handler(archive: Archive):
         def _json(self, payload: dict, code: int = 200) -> None:
             self._send(code, json.dumps(payload).encode(), "application/json")
 
+        def do_PUT(self) -> None:  # noqa: N802 - stdlib naming
+            url = urlparse(self.path)
+            if not url.path.startswith("/api/charts/") or not url.path.endswith("/notes"):
+                self._json({"error": "not found"}, 404)
+                return
+            spot = url.path[len("/api/charts/") : -len("/notes")]
+            if not _SAFE_SPOT.match(spot):
+                self._json({"error": "bad spot"}, 400)
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            try:
+                archive.provider.write_notes(spot, body.get("notes", ""))
+            except (KeyError, AttributeError):
+                self._json({"error": "not found"}, 404)
+                return
+            self._json({"ok": True})
+
         def do_GET(self) -> None:  # noqa: N802 - stdlib naming
             url = urlparse(self.path)
             query = parse_qs(url.query)
@@ -129,6 +149,25 @@ def make_handler(archive: Archive):
                 offset = int(query.get("offset", ["0"])[0])
                 limit = min(int(query.get("limit", ["60"])[0]), 200)
                 self._json(archive.summaries(offset, limit))
+                return
+
+            if url.path == "/api/charts":
+                charts = getattr(archive.provider, "spot_keys", ())
+                self._json({"spots": list(charts)})
+                return
+
+            if url.path.startswith("/api/charts/"):
+                spot = url.path[len("/api/charts/") :]
+                if not _SAFE_SPOT.match(spot) or spot not in getattr(
+                    archive.provider, "spot_keys", ()
+                ):
+                    self._json({"error": "not found"}, 404)
+                    return
+                self._json({
+                    "spot": spot,
+                    "grid": archive.provider.grid(spot),
+                    "notes": archive.provider.notes(spot),
+                })
                 return
 
             if url.path.startswith("/api/hands/"):

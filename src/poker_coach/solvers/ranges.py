@@ -148,6 +148,46 @@ class ChartProvider:
     def spot_keys(self) -> tuple[str, ...]:
         return tuple(sorted(self._spots))
 
+    def notes(self, spot_key: str) -> str:
+        """Free-text notes for a spot. Editable; not part of the strategy."""
+        f = self.root / spot_key / "_notes.md"
+        return f.read_text() if f.is_file() else ""
+
+    def write_notes(self, spot_key: str, text: str) -> None:
+        d = self.root / spot_key
+        if not d.is_dir():
+            raise KeyError(spot_key)
+        (d / "_notes.md").write_text(text)
+
+    def grid(self, spot_key: str) -> dict[str, dict[str, float]]:
+        """Every hand's action mix at a spot, for rendering the 13x13 view.
+
+        Normalized the same way `lookup` does, and with the fold remainder filled
+        in, so the UI never has to reimplement that and drift from it.
+        """
+        actions = self._spots.get(spot_key)
+        if actions is None:
+            return {}
+        out: dict[str, dict[str, float]] = {}
+        # Descending, matching how a range grid is drawn (A top-left, 2
+        # bottom-right). `RANKS` is ascending, and using it here produced "27s"
+        # where the canonical class is "72s" -- every off-diagonal cell missed.
+        order = RANKS[::-1]
+        for i, hi in enumerate(order):
+            for j, lo in enumerate(order):
+                klass = (hi + lo if i == j
+                         else f"{hi}{lo}s" if j > i else f"{lo}{hi}o")
+                freqs = {a: w.get(klass, 0.0) for a, w in actions.items()}
+                total = sum(freqs.values())
+                if total <= 0:
+                    out[klass] = {"fold": 1.0}
+                    continue
+                if "fold" not in freqs and total < 1.0:
+                    freqs["fold"] = 1.0 - total
+                    total = 1.0
+                out[klass] = {a: f / total for a, f in freqs.items() if f > 0}
+        return out
+
     def lookup(self, spot_key: str, hand: str) -> Solution | None:
         actions = self._spots.get(spot_key)
         if actions is None:

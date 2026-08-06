@@ -19,10 +19,38 @@
   }
   /* ---- list pane ---- */
   #list { border-right: 1px solid var(--line); overflow-y: auto; background: var(--panel); }
-  #list h1 {
-    font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim);
-    margin: 0; padding: 16px; border-bottom: 1px solid var(--line); font-weight: 600;
+  #tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .tab {
+    flex: 1; background: none; border: 0; color: var(--dim); cursor: pointer;
+    padding: 14px 0; font: inherit; font-size: 12px; font-weight: 650;
+    text-transform: uppercase; letter-spacing: .08em;
   }
+  .tab:hover { color: var(--text); }
+  .tab.on { color: var(--text); box-shadow: inset 0 -2px 0 var(--hero); }
+
+  /* range grid */
+  .rangegrid { display: grid; grid-template-columns: repeat(13, 1fr); gap: 2px; max-width: 640px; }
+  .rc {
+    aspect-ratio: 1; border-radius: 3px; font-size: 10px; font-weight: 650;
+    display: flex; align-items: center; justify-content: center;
+    color: #14161a; background: #e9eaee; position: relative; overflow: hidden;
+  }
+  .rc.pair { outline: 1px solid var(--text); outline-offset: -1px; }
+  .rc i { position: absolute; inset: 0 auto 0 0; }
+  .rc span { position: relative; }
+  .legend { display: flex; gap: 14px; margin: 14px 0 4px; font-size: 12px; align-items: center; }
+  .legend b { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  textarea.notes {
+    width: 100%; min-height: 240px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+    font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical;
+  }
+  .saverow { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
+  .btn {
+    background: var(--hero); color: #0d1117; border: 0; border-radius: 6px;
+    padding: 8px 16px; font: inherit; font-weight: 650; cursor: pointer;
+  }
+  .saved { color: var(--good); font-size: 12px; }
   .row {
     padding: 10px 16px; border-bottom: 1px solid var(--line); cursor: pointer;
     display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center;
@@ -48,7 +76,12 @@
     background: #f4f4f6; color: #14161a; border-radius: 4px;
     font: 600 13px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  .card.red { color: #c0392b; }
+  /* Four-colour deck: spades black, hearts red, diamonds blue, clubs green.
+     Suit is carried by colour alone here, so the letter stays visible too. */
+  .card.s { color: #14161a; }
+  .card.h { color: #c0392b; }
+  .card.d { color: #1f66c4; }
+  .card.c { color: #1b7a3e; }
   .card.back { background: var(--panel-2); color: var(--dim); }
 
   .street { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; overflow: hidden; }
@@ -113,16 +146,18 @@
 </style>
 </head>
 <body>
-  <div id="list"><h1>Hands</h1><div id="rows"></div><div id="more">load more</div></div>
+  <div id="list">
+    <div id="tabs"><button class="tab on" data-tab="hands">Hands</button><button class="tab" data-tab="charts">Charts</button></div>
+    <div id="rows"></div><div id="more">load more</div>
+  </div>
   <div id="detail"><div class="empty">Select a hand</div></div>
 
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 let offset = 0, total = 0, active = null;
 
-const RED = new Set(["h", "d"]);
 const faces = (cs) => `<span class="cards">${cs.map(c =>
-  `<span class="card${RED.has(c[1]) ? " red" : ""}">${c[0]}${c[1]}</span>`).join("")}</span>`;
+  `<span class="card ${c[1]}">${c[0]}${c[1]}</span>`).join("")}</span>`;
 
 // Two different absences, and they must not render the same way.
 // hole(): null means the cards exist but were never shown -> face-down.
@@ -244,6 +279,78 @@ function render(v) {
       }</div>`;
   $("#detail").scrollTop = 0;
 }
+
+const ACTION_COLOUR = { raise: "#e06c75", bet: "#e06c75", call: "#5fb87a",
+                        check: "#6ea8fe", mixed: "#d8a657", fold: "#e9eaee" };
+const RANKS13 = "AKQJT98765432".split("");
+
+async function loadCharts() {
+  const r = await fetch("/api/charts").then(r => r.json());
+  $("#rows").innerHTML = "";
+  $("#more").style.display = "none";
+  if (!r.spots.length) {
+    $("#rows").innerHTML = `<div class="row"><div class="meta">No charts imported.</div></div>`;
+    return;
+  }
+  for (const spot of r.spots) {
+    const el = document.createElement("div");
+    el.className = "row"; el.dataset.spot = spot;
+    el.innerHTML = `<div class="pos">${spot.split("_")[0]}</div>
+      <div><div class="meta">${spot.replace(/_/g, " ")}</div></div><div></div>`;
+    el.onclick = () => openChart(spot, el);
+    $("#rows").appendChild(el);
+  }
+}
+
+async function openChart(spot, el) {
+  if (active) active.classList.remove("active");
+  if (el) { active = el; el.classList.add("active"); }
+  const c = await fetch(`/api/charts/${encodeURIComponent(spot)}`).then(r => r.json());
+  const seen = new Set();
+  const cellHtml = (hand) => {
+    const mix = c.grid[hand] || { fold: 1 };
+    Object.keys(mix).forEach(a => seen.add(a));
+    // Mixed strategies are drawn as proportional bands, not a single winner
+    // colour -- flattening them would hide that more than one action is correct.
+    let x = 0;
+    const bands = Object.entries(mix).sort((a, b) => b[1] - a[1]).map(([a, f]) => {
+      const w = f * 100, style = `left:${x}%;width:${w}%;background:${ACTION_COLOUR[a] || "#888"}`;
+      x += w; return `<i style="${style}"></i>`;
+    }).join("");
+    return `<div class="rc${hand.length === 2 ? " pair" : ""}">${bands}<span>${hand}</span></div>`;
+  };
+  const cellsHtml = RANKS13.flatMap((hi, i) =>
+    RANKS13.map((lo, j) => cellHtml(i === j ? hi + lo : (j > i ? hi + lo + "s" : lo + hi + "o")))
+  ).join("");
+  $("#detail").innerHTML = `
+    <h2>${spot.split("_")[0]} <span class="sub" style="font-size:14px">${spot.replace(/_/g," ")}</span></h2>
+    <h3>Range</h3>
+    <div class="rangegrid">${cellsHtml}</div>
+    <div class="legend">${[...seen].map(a =>
+      `<span><b style="background:${ACTION_COLOUR[a] || "#888"}"></b>${a}</span>`).join("")}</div>
+    <h3>Notes</h3>
+    <textarea class="notes" id="notes">${c.notes.replace(/</g,"&lt;")}</textarea>
+    <div class="saverow"><button class="btn" id="save">Save notes</button><span class="saved" id="savedmsg"></span></div>`;
+  $("#save").onclick = async () => {
+    await fetch(`/api/charts/${encodeURIComponent(spot)}/notes`, {
+      method: "PUT", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ notes: $("#notes").value }),
+    });
+    $("#savedmsg").textContent = "saved";
+    setTimeout(() => { $("#savedmsg").textContent = ""; }, 1800);
+  };
+  $("#detail").scrollTop = 0;
+}
+
+document.querySelectorAll(".tab").forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x === t));
+    active = null;
+    $("#detail").innerHTML = `<div class="empty">Select a ${t.dataset.tab === "hands" ? "hand" : "chart"}</div>`;
+    if (t.dataset.tab === "charts") loadCharts();
+    else { $("#rows").innerHTML = ""; offset = 0; loadList(); }
+  };
+});
 
 $("#more").onclick = loadList;
 
