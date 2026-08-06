@@ -22,5 +22,5 @@ build-backend = "hatchling.build"
 packages = ["src/poker_coach"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]  # "." so tests can import tools/
 testpaths = ["tests"]

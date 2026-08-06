@@ -8,8 +8,9 @@ Early. What exists and works:
 
 - `models.py` — shared types
 - `corpus/schema.sql` — verified on SQLite 3.51 (7 tables, 2 views)
-- `replay.py` — the pokerkit boundary, covered by 15 passing tests
-- `pyproject.toml` — `pokerkit>=0.7,<0.8`, Python ≥ 3.11
+- `replay.py` — the pokerkit boundary
+- `tools/generate_corpus.py` — synthetic PHH corpus with planted, labelled mistakes
+- `pyproject.toml` — `pokerkit>=0.7,<0.8`, Python ≥ 3.11; 20 tests passing
 
 Not written yet: the ACR/WPN parser, the three pipeline stages, the range charts, and the CLI.
 Everything below describing those is agreed design, not shipped code — update this file as they
@@ -24,7 +25,42 @@ python3 -m venv .venv
 .venv/bin/python -m pytest tests/test_replay.py::test_cc_resolves_to_check_or_call   # one test
 ```
 
-Two environment gotchas on this machine, both already hit:
+### Synthetic corpus
+
+```bash
+.venv/bin/python tools/generate_corpus.py --count 2000 --out archive/synthetic --seed 1
+```
+
+Not committed — `archive/` is gitignored and the corpus is byte-reproducible from its seed, so
+the generator is the artifact, not its output. Regenerate rather than share files.
+
+Hands are *played* with pokerkit, so every one is legal by construction. Hero rotates through all
+six seats, and specific mistakes are planted on purpose and recorded in `manifest.json` by the
+ordinal of hero's decision in the hand. **That gives triage a recall measure**, which
+`v_detector_precision` cannot provide: precision can't see mistakes a detector never flagged. A
+detector at 95% precision that misses four of five planted `bb_overfold`s is broken, and only the
+manifest reveals it.
+
+At `--count 2000 --seed 1`: 202 planted across `bb_overfold` (86), `utg_open_too_wide` (102),
+`flop_float_with_air` (14); streets reached 952 / 177 / 100 / 771.
+
+Three caveats before trusting it for anything beyond pipeline development:
+
+- **`river_overcall` plants zero.** Hero floats the flop but folds the turn, so it never arrives at
+  a river bet holding air. That detector has no ground truth until hero's policy changes.
+- **Win rate is meaningless.** All six seats run the same crude policy and there is no skill model,
+  so hero's bb/100 is noise. Don't compute strategy conclusions from this corpus.
+- **Planted leaks must stay genuinely wrong.** An early version labelled folding 72o in the big
+  blind a `bb_overfold` because the trigger had no lower bound. Bad ground truth is worse than
+  none: it quietly makes every recall number wrong. Thresholds are frequency-derived
+  (`_threshold(0.45)` = top 45% of hands) rather than hand-picked, for the same reason.
+
+This does **not** help write the ACR parser. These are already PHH; the parser converts ACR's
+undocumented text format *into* PHH, and that needs real samples.
+
+### Environment
+
+Two gotchas on this machine, both already hit:
 
 - **pip defaults to Indeed's internal artifact proxy** (`dl.artifacts.indeed.tech`), which does not
   serve `pytest` or `hatchling`. Append `--index-url https://pypi.org/simple` for this project's
