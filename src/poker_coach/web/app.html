@@ -189,6 +189,10 @@
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 let offset = 0, total = 0, active = null;
+// What the left list currently holds. loadList() appends rather than replaces
+// (it paginates), so anything that switches modes has to clear first -- browser
+// Back out of a chart used to leave the chart rows sitting there.
+let listMode = null;
 // 9-handed-only charts are reference material for a game you don't play.
 let showRef = false;
 
@@ -207,6 +211,7 @@ const bb = (n) => n === null || n === undefined ? "" : `${n}bb`;
 const netClass = (n) => n > 0 ? "pos-net" : n < 0 ? "neg-net" : "zero-net";
 
 async function loadList() {
+  if (listMode !== "hands") { $("#rows").innerHTML = ""; offset = 0; listMode = "hands"; }
   const r = await fetch(`/api/hands?offset=${offset}&limit=60`).then(r => r.json());
   total = r.total;
   for (const row of r.rows) {
@@ -353,6 +358,7 @@ const RANKS13 = "AKQJT98765432".split("");
 
 async function loadCharts() {
   const r = await fetch("/api/charts").then(r => r.json());
+  listMode = "charts";
   $("#rows").innerHTML = "";
   $("#more").style.display = "none";
   if (!r.spots.length) {
@@ -466,7 +472,7 @@ document.querySelectorAll(".tab").forEach(t => {
     $("#detail").innerHTML = `<div class="empty">Select a ${t.dataset.tab === "hands" ? "hand" : "chart"}</div>`;
     history.replaceState(null, "", "#");
     if (t.dataset.tab === "charts") loadCharts();
-    else { $("#rows").innerHTML = ""; offset = 0; loadList(); }
+    else loadList();
   };
 });
 
@@ -483,9 +489,9 @@ async function route() {
     // #chart:SPOT or #chart:SPOT:HAND -- spot keys never contain a colon.
     const [, spot, hand] = want.split(":");
     setTab("charts");
-    // Rebuild the list only when we're not already showing it, so following a
-    // link from a hand doesn't flash and lose scroll position.
-    if (!$(`.row[data-spot]`)) await loadCharts();
+    // Rebuild only when the list isn't already in chart mode, so following a
+    // link between charts doesn't flash or lose scroll position.
+    if (listMode !== "charts") await loadCharts();
     // A 9-handed-only chart is hidden behind the toggle; a link straight to one
     // has to reveal it or it lands on a chart with no row to highlight.
     if (spot.startsWith("9max_") && !showRef) { showRef = true; await loadCharts(); }
@@ -496,11 +502,15 @@ async function route() {
   }
 
   setTab("hands");
-  if (!$(`.row[data-file]`)) await loadList();
+  if (listMode !== "hands") await loadList();
   if (want) {
     const row = $(`.row[data-file="${CSS.escape(want)}"]`);
     if (row) row.scrollIntoView({ block: "nearest" });
     await open(want, row);
+  } else {
+    if (active) active.classList.remove("active");
+    active = null;
+    $("#detail").innerHTML = `<div class="empty">Select a hand</div>`;
   }
 }
 
