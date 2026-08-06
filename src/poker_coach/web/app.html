@@ -432,7 +432,9 @@ function actorCards(a) {
 function renderAction(a, d) {
   // Marked on the row rather than only in a summary: the point of the label is
   // to say which decision in the hand is the one with a knowable price.
-  const exact = a.terminal
+  // Only where the cards are known: without them there is nothing to price,
+  // and the label would promise a number that cannot be worked out.
+  const exact = a.terminal && a.cards
     ? ` <span class="exact" title="${a.terminal === "river"
         ? "Last street, heads up: a call goes straight to showdown."
         : "Nobody left has chips behind: a call runs it out."

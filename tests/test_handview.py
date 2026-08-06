@@ -244,11 +244,6 @@ def test_terminal_nodes_are_marked_for_every_player(view):
     n = nodes[0]
     assert (n["street"], n["reason"], n["action"]) == ("river", "river", "fold")
     assert n["is_hero"] is False
-    # This fixture deals p6 face-up, so the node is priceable. Whether the cards
-    # are known is reported separately from whether the node is terminal: in a
-    # real hand a villain's are known only if they showed, and an unpriceable
-    # terminal node is still a terminal node.
-    assert n["cards_known"] is True
 
 
 def test_a_bet_is_not_terminal_only_the_decision_facing_it_is(view):
@@ -282,7 +277,6 @@ def test_facing_an_all_in_is_terminal_on_any_street(tmp_path):
             "is_hero": True,
             "action": "call",
             "reason": "all-in",
-            "cards_known": True,
         }
     ]
 

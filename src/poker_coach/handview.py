@@ -154,6 +154,12 @@ def build(
         "showdown": _showdown(hh, bb, hero, players),
         # Nodes whose cost is exactly computable without a solver. Every player's,
         # not just hero's -- see `_terminal`.
+        #
+        # Only where the actor's cards are known, because pricing the node needs
+        # them: hero's always are, a villain's only if they showed. A terminal
+        # node nobody can price is still terminal -- the raw fact stays on the
+        # action itself -- but surfacing it would put a label on a hand offering
+        # nothing to work out.
         "terminal": [
             {
                 "action_index": a["action_index"],
@@ -162,14 +168,10 @@ def build(
                 "is_hero": a["is_hero"],
                 "action": a["action"],
                 "reason": a["terminal"],
-                # Pricing it needs a range for the bettor and cards for the
-                # caller. Hero's are always known; a villain's only if they
-                # showed, which is why this says whether it can be done at all.
-                "cards_known": a["cards"] is not None,
             }
             for s in streets
             for a in s["actions"]
-            if a["terminal"]
+            if a["terminal"] and a["cards"]
         ],
         "interest": _interest(streets, hero_decisions, index, bb),
         # Filled by the analyze stage. Present and null so a client can rely on
