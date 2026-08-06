@@ -565,5 +565,8 @@ def _verdict(hero_action: str, solution) -> dict:
         "tone": tone,
         "frequency": round(freq, 3),
         "chart": solution.spot_key,
+        # The class the chart was consulted for, so a link can point at the
+        # exact square rather than dropping you into 169 of them.
+        "hand": solution.hand,
         "source": solution.provider,
     }

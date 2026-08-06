@@ -227,3 +227,24 @@ def test_unrevealed_hands_are_null_not_invented(view):
     """A villain who folded keeps their cards; inferring them would be fiction."""
     unknown = [p for p in view["showdown"]["players"] if p["cards"] is None]
     assert unknown
+
+
+def test_verdict_carries_the_hand_class_for_linking(tmp_path):
+    """The link points at one square, so the verdict has to say which."""
+    from poker_coach.solvers.base import ActionFrequency, Solution
+
+    class Fake:
+        name = "fake"
+        def lookup(self, spot_key, hand):
+            from poker_coach.solvers.ranges import canonical_class
+            return Solution(spot_key=spot_key, hand=canonical_class(hand),
+                            provider="fake",
+                            actions=(ActionFrequency("call", 1.0),))
+
+    p = tmp_path / "h.phh"
+    p.write_text(HAND)
+    v = handview.build(load(p), provider=Fake())
+    pre = v["hero_decisions"][0]
+    assert pre["verdict"]["hand"] == "K9s"        # Kd9d
+    assert pre["verdict"]["chart"] == pre["spot_key"]
+    assert pre["verdict"]["tone"] == "good"       # hero called; chart calls 100%
