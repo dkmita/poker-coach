@@ -27,6 +27,7 @@ correct, because nothing downstream does arithmetic on it.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pokerkit.notation import HandHistory
@@ -145,9 +146,57 @@ def build(
             "hero_net_bb": _bb(index.hero_net, bb),
             "rake_cents": index.rake,
         },
+        "showdown": _showdown(hh, bb, hero, players),
         # Filled by the analyze stage. Present and null so a client can rely on
         # the key existing rather than probing for it.
         "analysis": None,
+    }
+
+
+def _showdown(hh: HandHistory, bb: Cents, hero: int, players: int) -> dict:
+    """How the hand actually ended: final board, cards shown, who won what.
+
+    A hand view without this is missing the answer to the first question anyone
+    asks about a hand they lost. Cards are reported only where they were
+    genuinely revealed -- a villain who folded keeps their hand, and inferring
+    one would be inventing information.
+    """
+    board = ""
+    revealed: dict[int, str] = {}
+    for raw in hh.actions:
+        if raw.startswith("d db "):
+            board += raw.split(None, 2)[2].split("#")[0].strip()
+        m = re.match(r"^p(\d+) sm\s+(\S+)", raw.strip())
+        if m:
+            revealed[int(m.group(1)) - 1] = m.group(2)
+
+    finishing = hh.finishing_stacks or []
+    nets = [
+        int(finishing[i]) - int(s) if i < len(finishing) else 0
+        for i, s in enumerate(hh.starting_stacks)
+    ]
+    best = max(nets) if nets else 0
+
+    return {
+        "board": [board[i : i + 2] for i in range(0, len(board), 2)],
+        "went_to_showdown": bool(revealed),
+        "players": [
+            {
+                "seat": i,
+                "position": _position(i, players),
+                "name": (hh.players[i] if hh.players else f"p{i + 1}"),
+                "is_hero": i == hero,
+                # None means "never shown", not "no cards".
+                "cards": (
+                    [revealed[i][j : j + 2] for j in range(0, len(revealed[i]), 2)]
+                    if i in revealed else None
+                ),
+                "net_cents": nets[i],
+                "net_bb": _bb(nets[i], bb),
+                "won": nets[i] > 0 and nets[i] == best,
+            }
+            for i in range(players)
+        ],
     }
 
 
@@ -180,6 +229,20 @@ def _walk(
 
     One pass because pokerkit mutates its `State` in place — see `replay.py`.
     """
+    # Board per street, taken from the `d db` deal actions. Reading it off the
+    # state at the first *player* action gets the turn wrong (the state lags a
+    # deal) and misses a street entirely when everyone is already all-in and
+    # nobody acts on it.
+    dealt = ""
+    board_by_street: dict[Street, str] = {Street.PREFLOP: ""}
+    street_seq: list[Street] = [Street.PREFLOP]
+    for raw in hh.actions:
+        if raw.startswith("d db "):
+            dealt += raw.split(None, 2)[2].split("#")[0].strip()
+            st = _STREETS[0] if not dealt else _STREETS[len(dealt) // 2 - 2]
+            board_by_street[st] = dealt
+            street_seq.append(st)
+
     streets: dict[Street, dict] = {}
     hero_decisions: list[dict] = []
     # The last street hero actually acted on. Distinct from how far the *hand*
@@ -246,11 +309,12 @@ def _walk(
             "is_all_in": amount > 0 and amount >= stack_before,
         }
 
+        full = board_by_street.get(street, board)
         bucket = streets.setdefault(
             street,
             {
                 "street": street.value,
-                "board": [board[i : i + 2] for i in range(0, len(board), 2)],
+                "board": [full[i : i + 2] for i in range(0, len(full), 2)],
                 "pot_start_cents": pot_before,
                 "pot_start_bb": _bb(pot_before, bb),
                 "actions": [],
@@ -272,6 +336,19 @@ def _walk(
                 "pct_pot": entry["pct_pot"],
             }
 
+    # A street that was dealt but never acted on -- an all-in runout -- still
+    # happened, and omitting it drops the card that decided the hand.
+    for st in street_seq:
+        if st not in streets and st is not Street.PREFLOP:
+            full = board_by_street[st]
+            streets[st] = {
+                "street": st.value,
+                "board": [full[i : i + 2] for i in range(0, len(full), 2)],
+                "pot_start_cents": None,
+                "pot_start_bb": None,
+                "actions": [],
+                "runout": True,
+            }
     ordered = sorted(streets.values(), key=lambda s: _STREET_ORDER[Street(s["street"])])
     return ordered, hero_decisions, hero_last_street
 

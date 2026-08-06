@@ -58,11 +58,29 @@ ASSUMPTIONS THAT MAY NOT MATCH YOUR GAME
 Treat as a default, not as a solver output.
 """
 
-# 6-max equivalents, by players left to act rather than by name.
-SIX_MAX_EQUIVALENT = {
-    "Lojack": "UTG", "Hijack": "HJ", "Cutoff": "CO",
-    "Button": "BTN", "Small Blind": "SB",
+# 9-handed seat -> its 6-max equivalent, matched by players left to act rather
+# than by name. UTG, UTG+1 and UTG+2 have no 6-max counterpart: a 6-max table
+# simply does not have those seats.
+SIX_MAX = {
+    "Lojack": "UTG", "LJ": "UTG",
+    "Hijack": "HJ", "HJ": "HJ",
+    "Cutoff": "CO", "CO": "CO",
+    "Button": "BTN", "BTN": "BTN",
+    "Small Blind": "SB", "SB": "SB",
+    "Big Blind": "BB", "BB": "BB",
 }
+NINE_MAX_ONLY = {"UTG", "UTG+1", "UTG+2"}
+
+SIZE_NOTE = """\
+### Villain sizing
+
+The spot key carries no raise size. The pack states sizing by position rather
+than per chart -- 2.5bb opens in position, 3.5bb out, 3-bets 3x/3.5x, 4-bets
+2.5x/2.75x -- so pinning one size per chart would be inventing precision the
+source does not have. `ChartProvider` therefore falls back to the size-agnostic
+key, and this chart answers for any nearby size. Treat it as approximate when
+the actual sizing is far from the pack's.
+"""
 
 
 def cells(w: int, h: int, px) -> dict[str, str]:
@@ -172,12 +190,54 @@ def resources_map(d: bytes) -> dict[str, int]:
     return out
 
 
-def spot_key(label: str) -> str:
-    """Our canonical spot key for a chart label, or '' if it has no 6-max form."""
-    label = label.strip()
-    if label in SIX_MAX_EQUIVALENT:
-        return f"{SIX_MAX_EQUIVALENT[label]}_preflop_unopened_100bb"
-    return ""  # facing-RFI and vs-3bet keys need the villain's size; see notes
+_LABEL = re.compile(r"^[A-Za-z][A-Za-z0-9+/ ]{0,28}$")
+
+
+def _is_label(text: str) -> bool:
+    t = text.strip()
+    if not t or not _LABEL.match(t):
+        return False
+    # Seat names are capitalised tokens ("Lojack", "HJ vs CO 3bet"); prose isn't.
+    return all(w[0].isupper() or w[0].isdigit() or w in ("vs", "3bet")
+               for w in t.split())
+
+
+def _seat(name: str) -> tuple[str, bool]:
+    """(seat label, is_six_max). Compound seats map only if every part maps."""
+    name = name.strip()
+    parts = name.split("/")
+    if all(p in SIX_MAX for p in parts):
+        mapped = sorted({SIX_MAX[p] for p in parts})
+        return "-".join(mapped), True
+    return name.replace("/", "-").replace(" ", ""), False
+
+
+def spot_key(label: str) -> tuple[str, str]:
+    """(spot key, kind) for a chart label.
+
+    Keys carry no raise size -- see SIZE_NOTE. Charts with no 6-max equivalent
+    are still imported, under a `9max_` prefix: they are useful to read even
+    though no 6-max hand will ever look them up, and dropping them would lose
+    two thirds of the pack.
+    """
+    label = " ".join(label.split())
+    if label.lower() == "sb limp vs bb raise":
+        return "SB_preflop_limp_vs_BB_raise_100bb", "limp"
+    for pat in (r"^(?P<hero>.+?) RFI vs (?P<vill>.+?) 3bet$",
+                r"^(?P<hero>.+?) vs (?P<vill>.+?) 3bet$"):
+        m = re.match(pat, label)
+        if m:
+            hero, h6 = _seat(m["hero"]); vill, v6 = _seat(m["vill"])
+            pre = "" if (h6 and v6) else "9max_"
+            return f"{pre}{hero}_preflop_vs_{vill}_3bet_100bb", "vs 3-bet"
+    m = re.match(r"^(?P<hero>.+?) vs (?P<vill>.+?)$", label)
+    if m:
+        hero, h6 = _seat(m["hero"]); vill, v6 = _seat(m["vill"])
+        pre = "" if (h6 and v6) else "9max_"
+        return f"{pre}{hero}_preflop_vs_{vill}_raise_100bb", "facing a raise"
+    seat, ok = _seat(label)
+    pre = "" if ok else "9max_"
+    return f"{pre}{seat}_preflop_unopened_100bb", "open-raise"
 
 
 def main() -> int:
@@ -208,7 +268,10 @@ def main() -> int:
         labels: list[str] = []
         for line in lines[1:]:
             parts = re.split(r"\s{2,}", line.strip())
-            if all(len(p) < 40 for p in parts):
+            # A chart label is a short seat expression: no sentence punctuation,
+            # no lowercase prose. Without this the footnote on the last page
+            # becomes a chart named "used as a limp/3-bet for value."
+            if all(_is_label(p) for p in parts):
                 labels.extend(p for p in parts if p)
         layout = next((l for l in layouts if len(l) == len(labels)), None)
         if not labels or layout is None:
@@ -217,10 +280,7 @@ def main() -> int:
         # Visual order: down the page, then across. y grows downward here.
         ordered = sorted(layout, key=lambda t: (round(t[2] / 5000), t[1]))
         for label, (name, _x, _y) in zip(labels, ordered):
-            key = spot_key(label)
-            if not key:
-                skipped.append(label)
-                continue
+            key, kind = spot_key(label)
             obj = resources.get(name)
             if obj not in objects:
                 skipped.append(label)
@@ -236,10 +296,18 @@ def main() -> int:
                 if action == "fold":
                     continue  # inferred as the remainder
                 (spot / f"{action}.txt").write_text(", ".join(sorted(hands)) + "\n")
+            six = not key.startswith("9max_")
+            applies = (
+                f"6-max equivalent of the 9-handed **{label}** chart."
+                if six else
+                f"**No 6-max equivalent.** This is the 9-handed **{label}** chart; a "
+                "6-max table has no UTG/UTG+1/UTG+2 seat, so no hand of yours will "
+                "ever match it. Kept for reading."
+            )
             (spot / "_notes.md").write_text(
-                f"# {label}\n\n_Imported from `{args.pdf.name}`, page {page_no}._\n\n"
-                f"{SOURCE_NOTE}\n"
-                f"6-max equivalent of the 9-handed **{label}** chart.\n\n"
+                f"# {label}\n\n_{kind.capitalize()} · imported from "
+                f"`{args.pdf.name}`, page {page_no}._\n\n"
+                f"{applies}\n\n{SOURCE_NOTE}\n{SIZE_NOTE}\n"
                 "## Your notes\n\n_Edit this section in the UI._\n"
             )
             written += 1

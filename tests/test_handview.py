@@ -197,3 +197,29 @@ def test_hero_showdown_is_not_anyone_showdown(folded_view):
 def test_hero_reaching_showdown_is_reported(view):
     """The other direction: when hero does show, say so."""
     assert view["result"]["hero_street_reached"] == "river"
+
+
+def test_board_comes_from_the_deal_actions(tmp_path):
+    """Regression: reading the board from the state at the first player action
+    showed the turn with only three cards -- the state lags a deal."""
+    p = tmp_path / "h.phh"
+    p.write_text(HAND)
+    v = handview.build(load(p))
+    by = {s["street"]: s["board"] for s in v["streets"]}
+    assert by["flop"] == ["7h", "2c", "3d"]
+    assert by["turn"] == ["7h", "2c", "3d", "Ts"]
+    assert by["river"] == ["7h", "2c", "3d", "Ts", "4c"]
+
+
+def test_showdown_reports_cards_and_result(view):
+    sd = view["showdown"]
+    assert sd["board"] == ["7h", "2c", "3d", "Ts", "4c"]
+    hero = next(p for p in sd["players"] if p["is_hero"])
+    assert hero["cards"] == ["Kd", "9d"]
+    assert hero["net_cents"] == 530 and hero["won"] is True
+
+
+def test_unrevealed_hands_are_null_not_invented(view):
+    """A villain who folded keeps their cards; inferring them would be fiction."""
+    unknown = [p for p in view["showdown"]["players"] if p["cards"] is None]
+    assert unknown

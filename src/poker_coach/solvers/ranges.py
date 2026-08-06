@@ -188,10 +188,33 @@ class ChartProvider:
                 out[klass] = {a: f / total for a, f in freqs.items() if f > 0}
         return out
 
+    # "BB_preflop_vs_UTG_raise_2.5bb_100bb" -> "BB_preflop_vs_UTG_raise_100bb"
+    _SIZE = re.compile(r"^(?P<head>.*)_[\d.]+bb(?P<depth>_\d+bb)$")
+
+    def resolve(self, spot_key: str) -> str | None:
+        """The charted spot answering for `spot_key`, if any.
+
+        Falls back to a size-agnostic key. Charts are published per action, not
+        per raise size, so demanding an exact size match would miss on every
+        lookup; a chart for "BB vs a UTG raise" answers usefully whether the open
+        was 2.2bb or 2.5bb. Far-off sizings are a real approximation, which the
+        chart's notes say out loud.
+        """
+        if spot_key in self._spots:
+            return spot_key
+        m = self._SIZE.match(spot_key)
+        if m:
+            generic = m["head"] + m["depth"]
+            if generic in self._spots:
+                return generic
+        return None
+
     def lookup(self, spot_key: str, hand: str) -> Solution | None:
-        actions = self._spots.get(spot_key)
+        resolved = self.resolve(spot_key)
+        actions = self._spots.get(resolved) if resolved else None
         if actions is None:
             return None
+        spot_key = resolved
         klass = canonical_class(hand)
 
         freqs = {a: w.get(klass, 0.0) for a, w in actions.items()}
