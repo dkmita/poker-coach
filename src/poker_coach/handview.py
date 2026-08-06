@@ -604,10 +604,15 @@ def _interest(streets: list[dict], decisions: list[dict], index: HandIndex, bb: 
     )
 
     reasons: list[str] = []
-    if index.street_reached is not Street.PREFLOP and any(
-        d["street"] != "preflop" for d in decisions
-    ):
-        reasons.append("played postflop")
+    # Name the street hero actually reached rather than the generic "postflop" --
+    # "river" and "flop" are different amounts of hand to review, and the label
+    # is what you scan the list by.
+    deepest = max(
+        (Street(d["street"]) for d in decisions), default=Street.PREFLOP,
+        key=lambda st: _STREETS.index(st),
+    )
+    if deepest is not Street.PREFLOP:
+        reasons.append(deepest.value)
     if invested >= _DEEP_INVESTED_BB:
         reasons.append(f"{invested:.0f}bb invested")
     if abs(index.hero_net / bb) >= _BIG_SWING_BB:

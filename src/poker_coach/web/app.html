@@ -112,10 +112,13 @@
 
   .cards { display: inline-flex; gap: 4px; vertical-align: middle; }
   .card {
-    display: inline-block; min-width: 26px; text-align: center; padding: 2px 5px;
+    display: inline-block; min-width: 28px; text-align: center; padding: 2px 5px;
     background: #f4f4f6; color: #14161a; border-radius: 4px;
     font: 600 13px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
+  /* The pip carries the suit; nudged up slightly so rank and symbol sit on the
+     same optical line, and never allowed emoji presentation. */
+  .card i { font-style: normal; font-size: 12px; margin-left: 1px; font-variant-emoji: text; }
   /* Four-colour deck: spades black, hearts red, diamonds blue, clubs green.
      Suit is carried by colour alone here, so the letter stays visible too. */
   .card.s { color: #14161a; }
@@ -140,6 +143,17 @@
   }
   .act:first-of-type { border-top: 0; }
   .act.hero { background: rgba(110,168,254,.07); }
+  details.act { display: block; padding: 0; }
+  details.act > summary {
+    display: grid; grid-template-columns: 52px 92px 1fr auto auto; gap: 10px;
+    align-items: baseline; padding: 6px 14px; cursor: pointer; list-style: none;
+  }
+  details.act > summary::-webkit-details-marker { display: none; }
+  details.act > summary:hover { background: rgba(110,168,254,.06); }
+  .chev { color: var(--dim); transition: transform .15s; font-size: 15px; }
+  details[open] .chev { transform: rotate(90deg); display: inline-block; }
+  .decbody { padding: 4px 14px 14px; border-top: 1px dashed var(--line); }
+  .decbody .facts { margin-top: 10px; }
   .act .who { color: var(--dim); font-weight: 650; font-size: 12px; }
   .act.hero .who { color: var(--hero); }
   .act .what { font-weight: 600; }
@@ -151,7 +165,7 @@
   .dec .st { font-size: 11px; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); font-weight: 700; }
   .dec .action { font-weight: 650; font-size: 15px; }
   .verdict {
-    margin-left: auto; text-decoration: none; border-radius: 999px;
+    text-decoration: none; white-space: nowrap; border-radius: 999px;
     padding: 3px 11px; font-size: 11px; font-weight: 650; border: 1px solid;
   }
   .verdict em { font-style: normal; opacity: .65; margin-left: 6px; font-variant-numeric: tabular-nums; }
@@ -216,8 +230,12 @@ let filterKind = "all";
 // 9-handed-only charts are reference material for a game you don't play.
 let showRef = false;
 
+// U+FE0E forces text presentation. Without it the heart and diamond flip to
+// emoji on macOS and render in the font's own fixed colours, which throws away
+// the four-colour deck.
+const SUIT = { s: "\u2660\uFE0E", h: "\u2665\uFE0E", d: "\u2666\uFE0E", c: "\u2663\uFE0E" };
 const faces = (cs) => `<span class="cards">${cs.map(c =>
-  `<span class="card ${c[1]}">${c[0]}${c[1]}</span>`).join("")}</span>`;
+  `<span class="card ${c[1]}">${c[0]}<i>${SUIT[c[1]] || c[1]}</i></span>`).join("")}</span>`;
 
 // Two different absences, and they must not render the same way.
 // hole(): null means the cards exist but were never shown -> face-down.
@@ -228,6 +246,9 @@ const hole = (cs) => cs && cs.length ? faces(cs)
 const board = (cs) => cs && cs.length ? faces(cs) : "";
 
 const bb = (n) => n === null || n === undefined ? "" : `${n}bb`;
+// Rake is genuinely a money figure -- the whole point of it is what it costs --
+// so it reads in dollars while everything else stays in big blinds.
+const money = (cents) => `$${(cents / 100).toFixed(2)}`;
 const netClass = (n) => n > 0 ? "pos-net" : n < 0 ? "neg-net" : "zero-net";
 
 async function loadList() {
@@ -256,11 +277,11 @@ async function loadList() {
         <div class="pos">${row.position}</div>
         <div>${hole(row.hole_cards)}
           <div class="meta">${row.hero_street_reached} · ${row.eff_stack_bb}bb</div>
-          ${off.length ? `<div class="flag" title="${off.join("; ")}">preflop${
-            off.length > 1 ? ` ×${off.length}` : ""}</div>` : ""}${
+          ${off.length ? `<div class="flag" title="${off.join(" · ")}">${
+            off.length > 1 ? `${off.length} preflop` : "preflop"}</div>` : ""}${
             (row.interest || []).length ? `<div class="flag note" title="${
-              row.interest.join("; ")}">${row.interest[0]}${
-              row.interest.length > 1 ? ` +${row.interest.length - 1}` : ""}</div>` : ""}</div>
+              row.interest.join(" · ")}">${row.interest.slice(0, 2).join(" · ")}${
+              row.interest.length > 2 ? ` +${row.interest.length - 2} more` : ""}</div>` : ""}</div>
         <div class="net ${netClass(row.hero_net_bb)}">${row.hero_net_bb > 0 ? "+" : ""}${row.hero_net_bb}</div>`;
     }
     el.onclick = () => open(row.file, el);
@@ -279,18 +300,52 @@ async function open(file, el) {
   render(await fetch(`/api/hands/${file}`).then(r => r.json()));
 }
 
-function renderAction(a) {
-  let size = "";
+function actionSize(a) {
   if (a.action === "bet" || a.action === "raise") {
-    size = `to ${bb(a.to_bb)}` + (a.pct_pot ? ` · ${a.pct_pot}% pot` : "");
-  } else if (a.action === "call") {
-    size = bb(a.amount_bb);
+    return `to ${bb(a.to_bb)}` + (a.pct_pot ? ` · ${a.pct_pot}% pot` : "");
   }
-  return `<div class="act${a.is_hero ? " hero" : ""}">
-    <div class="who">${a.position}</div>
-    <div class="what">${a.action}</div>
-    <div class="size">${size}${a.is_all_in ? ' <span class="allin">ALL-IN</span>' : ""}</div>
-  </div>`;
+  return a.action === "call" ? bb(a.amount_bb) : "";
+}
+
+// Hero's rows carry their own analysis, collapsed. Reading a hand means
+// following the action; a separate decisions list repeated the whole sequence
+// and made you match rows by eye. The verdict label stays visible collapsed --
+// that is the part you scan for.
+function renderAction(a, d) {
+  const size = `${actionSize(a)}${a.is_all_in ? ' <span class="allin">ALL-IN</span>' : ""}`;
+  const head = `<span class="who">${a.position}</span>
+      <span class="what">${a.action}</span>
+      <span class="size">${size}</span>`;
+  if (!a.is_hero || !d) {
+    return `<div class="act${a.is_hero ? " hero" : ""}">${head}</div>`;
+  }
+  return `<details class="act hero">
+    <summary>${head}${renderVerdict(d)}<span class="chev">›</span></summary>
+    <div class="decbody">
+      <div class="facts">${decisionFacts(d)}</div>
+      ${renderGto(d)}
+      ${renderAnalysis(d)}
+    </div>
+  </details>`;
+}
+
+function decisionFacts(d) {
+  const f = [];
+  if (d.pot_odds !== null) f.push(["pot odds", `${(d.pot_odds * 100).toFixed(1)}%`]);
+  if (d.to_call_bb) f.push(["to call", bb(d.to_call_bb)]);
+  f.push(["pot", bb(d.pot_before_bb)]);
+  if (d.spr !== null) f.push(["SPR", d.spr]);
+  if (d.stack_before_bb !== null) f.push(["stack", bb(d.stack_before_bb)]);
+  if (d.facing) {
+    f.push(["facing", `${d.facing.position} ${d.facing.action} to ${bb(d.facing.to_bb)}${
+      d.facing.all_in ? " all-in" : ""}`]);
+  }
+  return f.map(([k, v]) => `<div class="fact"><b>${k}</b><span>${v}</span></div>`).join("");
+}
+
+function renderAnalysis(d) {
+  return `<div class="gto"><div class="label">Analysis</div>${
+    d.analysis ? d.analysis.comment : `<div class="none">Not analyzed yet.</div>`}</div>`;
 }
 
 function renderGto(d) {
@@ -318,31 +373,11 @@ function renderVerdict(d) {
   const v = d.verdict;
   // The chart is a link, not a citation: a verdict you cannot check is worth
   // less than no verdict.
-  return `<a class="verdict ${v.tone}" href="#chart:${v.chart}:${v.hand}"
+  // Inside a <summary>, a click would also toggle the row open.
+  return `<a class="verdict ${v.tone}" onclick="event.stopPropagation()"
+    href="#chart:${v.chart}:${v.hand}"
     title="${v.hand} in ${v.chart.replace(/_/g," ")}">${v.label}
     <em>${(v.frequency * 100).toFixed(0)}%</em></a>`;
-}
-
-function renderDecision(d) {
-  const f = [];
-  if (d.pot_odds !== null) f.push(["pot odds", `${(d.pot_odds * 100).toFixed(1)}%`]);
-  if (d.to_call_bb) f.push(["to call", bb(d.to_call_bb)]);
-  f.push(["pot", bb(d.pot_before_bb)]);
-  if (d.spr !== null) f.push(["SPR", d.spr]);
-  if (d.stack_before_bb !== null) f.push(["stack", bb(d.stack_before_bb)]);
-  if (d.facing) f.push(["facing", `${d.facing.position} ${d.facing.action} to ${bb(d.facing.to_bb)}`]);
-
-  const analysis = d.analysis
-    ? `<div class="gto"><div class="label">Analysis</div>${d.analysis.comment}</div>`
-    : `<div class="gto"><div class="label">Analysis</div>
-       <div class="none">Not analyzed yet.</div></div>`;
-
-  return `<div class="dec">
-    <div class="head"><span class="st">${d.street}</span>
-      <span class="action">${d.hero_action}${d.to_bb && d.hero_action !== "call" ? ` to ${bb(d.to_bb)}` : ""}</span>
-      ${board(d.board)}${renderVerdict(d)}</div>
-    <div class="facts">${f.map(([k, v]) => `<div class="fact"><b>${k}</b><span>${v}</span></div>`).join("")}</div>
-    ${renderGto(d)}${analysis}</div>`;
 }
 
 function renderOutcome(v) {
@@ -356,15 +391,23 @@ function renderOutcome(v) {
         <div class="size ${netClass(p.net_bb)}">${p.net_bb > 0 ? "+" : ""}${p.net_bb}bb${
           p.won ? ' <span class="allin">WON</span>' : ""}</div>
       </div>`).join("");
+  const rakeC = v.result.rake_cents || 0;
+  const rakeBB = (rakeC / v.hand.stakes.bb_cents).toFixed(2);
+  // Zero is a real state, not missing data: ACR takes nothing when the hand ends
+  // before a flop ("no flop, no drop"), so say that rather than showing $0.00.
+  const rake = rakeC
+    ? `<span class="pot" title="${rakeBB}bb">rake ${money(rakeC)}</span>`
+    : `<span class="pot dimnote">no rake</span>`;
   return `<h3>Outcome</h3>
     <div class="street"><header>
         <span class="name">${sd.went_to_showdown ? "showdown" : "no showdown"}</span>
-        ${board(sd.board)}</header>${rows}</div>`;
+        ${board(sd.board)}${rake}</header>${rows}</div>`;
 }
 
 function render(v) {
   if (v.error) { $("#detail").innerHTML = `<div class="empty">${v.error}</div>`; return; }
   const h = v.hand, r = v.result;
+  const byIndex = new Map(v.hero_decisions.map(d => [d.action_index, d]));
   $("#detail").innerHTML = `
     <h2>${h.hero.position} &nbsp;${hole(h.hero.hole_cards)}</h2>
     <div class="sub">${h.site}/${h.site_hand_id} · ${h.stakes.label} · ${h.table.players_dealt}-handed ·
@@ -373,10 +416,8 @@ function render(v) {
     ${v.streets.map(s => `<div class="street"><header>
         <span class="name">${s.street}</span>${board(s.board)}
         <span class="pot">${s.pot_start_bb === null ? "run out" : "pot " + bb(s.pot_start_bb)}</span></header>
-      ${s.actions.map(renderAction).join("")}</div>`).join("")}
+      ${s.actions.map(a => renderAction(a, byIndex.get(a.action_index))).join("")}</div>`).join("")}
     ${renderOutcome(v)}
-    <h3>Your decisions</h3>
-    ${v.hero_decisions.map(renderDecision).join("")}
     <div class="result">You were out on <b>${r.hero_street_reached}</b>${r.hero_went_to_showdown ? ", at showdown" : ""} ·
       net <span class="${netClass(r.hero_net_bb)}">${r.hero_net_bb > 0 ? "+" : ""}${r.hero_net_bb}bb</span>${
         r.hero_street_reached !== r.street_reached
