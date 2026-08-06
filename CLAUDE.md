@@ -203,16 +203,28 @@ plausible-but-wrong numbers rather than raising, and all three are why the depen
 1. **One `State` object, mutated in place.** Every `state_actions` pair yields the same instance,
    so `[s for s, _ in hh.state_actions]` is N references to the *final* state. Read what you need
    during the pass.
-2. **`state_actions` is off by one.** Pair `i` is `(state_i, action[i-1])`, where `state_i` is what
-   `hh.actions[i]` faced. Index into `hh.actions` yourself; ignore the action in the tuple.
+2. **`state_actions` does not line up with `hh.actions` at all.** Pair `i` is
+   `(state_after_action_i, action_i)`, so the state facing an action is the previous pair's. That
+   reads like a plain off-by-one and *works until the flop* — but pokerkit also emits states for its
+   own automatic operations, whose action half is `None`. Heads-up it inserts one at every postflop
+   street transition: 16 actions come back as **21 pairs**, and the drift grows by one per street.
+   Six-handed the extras land only after the last action, which is why a six-handed fixture will
+   pass under a pairing that is wrong for every postflop action in a heads-up hand.
+   **Use `iter_action_states`**, which pairs from the walk itself and never indexes `hh.actions`.
 3. **`street_index` is positional, not board-derived.** At the first state of each street the card
    hasn't been dealt, so board length lags.
 
-`iter_decisions` asserts `state.actor_index` matches the seat named in the action, which is what
-turns a future regression into a `ReplayError` instead of silently wrong pot sizes. Two things
-pokerkit gives us for free and we should not rebuild: it **validates** betting legality (an illegal
-sequence raises, so a hand that replays is internally consistent), and `pokerkit.notation.rake`
-implements percentage/cap/no-flop-no-drop.
+`parse_player_action` asserts `state.actor_index` matches the seat named in the action, which is
+what turns a pairing regression into a `ReplayError` instead of silently wrong pot sizes. It lives
+in `replay.py` so that **every** consumer gets the check: `handview._walk` once had its own copy of
+this logic without it, and rendered postflop calls as checks and raises as bets for months, with
+plausible pot sizes throughout. Do not re-derive the pairing anywhere else.
+
+Two things pokerkit gives us for free and we should not rebuild: it **validates** betting legality
+(an illegal sequence raises, so a hand that replays is internally consistent), and
+`pokerkit.notation.rake` implements percentage/cap/no-flop-no-drop. Note the limit of that
+validation: pokerkit applies each action to whoever *it* thinks is the actor, not to the seat named
+in the PHH line, so a hand can replay cleanly while disagreeing with the file about who acted.
 
 pokerkit also ships site parsers (`HandHistory.from_pokerstars`, `from_partypoker`, …). There is no
 WPN/ACR one, but `PokerStarsParser` is a useful reference when writing it.

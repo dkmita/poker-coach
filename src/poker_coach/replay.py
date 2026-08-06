@@ -19,13 +19,19 @@ Semantics worth knowing before editing this file, all verified against pokerkit
   the pass, before the next step mutates it. This fails silently and
   plausibly -- you get real-looking numbers from the wrong moment in the hand.
 
-* The pairs are **off by one**. Pair `i` holds `(state_i, action[i-1])`, where
-  `state_i` is what `hh.actions[i]` faced. So the state half lines up with
-  `hh.actions` positionally and the action half does not: index into
-  `hh.actions[i]` yourself and ignore the action in the tuple. `iter_decisions`
-  asserts `state.actor_index` matches the seat named in the action rather than
-  trusting either fact, because both are undocumented behavior of a 0.x library
-  and both go wrong quietly.
+* **The pairs are not positionally aligned with `hh.actions` at all.** Pair `i`
+  is `(state_after_action_i, action_i)`, so the state facing an action is the
+  one from the *previous* pair. That much looks like a plain off-by-one, and
+  treating it as one works right up to the flop -- but pokerkit also emits
+  states for its own automatic operations, which have no PHH action and come
+  back with `None` in the action half. A heads-up hand that reaches the river
+  yields 21 pairs for 16 actions, and the drift grows by one at every street.
+  Reading `hh.actions[i]` against pair `i` therefore judges each postflop action
+  against the state one action too early: `to_call` reads 0, so calls render as
+  checks and raises as bets, and the numbers stay plausible throughout.
+  `iter_action_states` pairs each action with the last state seen before it and
+  ignores positional indexing entirely; it is the only correct way to walk a
+  replay, and everything in this codebase goes through it.
 * `state.street_index` maps directly onto `Street` by position (0 preflop, 1
   flop, 2 turn, 3 river). It is *not* derivable from board length -- at the first
   state of each street the board card hasn't been dealt yet.
@@ -41,6 +47,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -139,6 +146,116 @@ def _hole(state: object, actor: int) -> str:
     return "".join(_card(c) for c in cards)
 
 
+@dataclass(frozen=True, slots=True)
+class ActionState:
+    """One action, and the state it actually faced.
+
+    A snapshot rather than a live `State`: pokerkit mutates one object in place,
+    so anything read after the walk moves on is read from the wrong moment.
+    Scalars are copied out at the moment they are true.
+    """
+
+    action_index: int
+    """Index into `hh.actions`. Stable across re-analysis, which is what makes it
+    usable as the key of a `flagged_decisions` row."""
+    raw: str
+    actor_index: int | None
+    street: Street
+    to_call: Cents
+    bets: tuple[Cents, ...]
+    stacks: tuple[Cents, ...]
+    pot: Cents
+    board: str
+    hole: tuple[str, ...]
+
+
+def _snapshot(state: object) -> dict:
+    street = getattr(state, "street_index", None)
+    return {
+        "actor_index": state.actor_index,  # type: ignore[attr-defined]
+        "street": _STREETS[street] if street is not None else _STREETS[0],
+        "to_call": int(state.checking_or_calling_amount or 0),  # type: ignore[attr-defined]
+        "bets": tuple(int(b) for b in state.bets),  # type: ignore[attr-defined]
+        "stacks": tuple(int(s) for s in state.stacks),  # type: ignore[attr-defined]
+        "pot": int(state.total_pot_amount),  # type: ignore[attr-defined]
+        "board": _board(state),
+        "hole": tuple(
+            _hole(state, i)
+            for i in range(len(state.hole_cards))  # type: ignore[attr-defined]
+        ),
+    }
+
+
+def iter_action_states(hh: HandHistory) -> Iterator[ActionState]:
+    """Every action in the hand, paired with the state that faced it.
+
+    Pairing comes from the walk itself -- the state carried forward from the
+    previous pair -- never from indexing `hh.actions`, because pokerkit
+    interleaves states for its own automatic operations and the two sequences
+    are different lengths. See the module docstring.
+    """
+    facing: dict | None = None
+    index = -1
+    for state, applied in hh.state_actions:
+        if applied is not None:
+            index += 1
+            if index >= len(hh.actions):
+                break  # pokerkit replayed more than the file declared
+            # The action half is pokerkit's echo of what it applied. If it has
+            # stopped matching the file we are pairing against the wrong hand,
+            # and every number downstream is quietly wrong.
+            if applied.strip() != hh.actions[index].strip():
+                raise ReplayError(
+                    f"replay diverged at action {index}: file has "
+                    f"{hh.actions[index]!r}, pokerkit applied {applied!r}"
+                )
+            if facing is not None:
+                yield ActionState(action_index=index, raw=applied, **facing)
+        facing = _snapshot(state)
+
+
+def parse_player_action(
+    st: ActionState,
+) -> tuple[int, ActionType, Cents, Cents | None] | None:
+    """`(seat, kind, amount, to_amount)` for a voluntary action, else `None`.
+
+    `None` covers everything that is not a decision we judge: dealer actions,
+    shows and mucks, discards, bring-ins.
+
+    Resolving PHH's collapsed verbs lives here rather than in each caller
+    because `to_call` is the only thing separating a check from a call and a bet
+    from a raise, and a second copy of that rule is a second chance to pair it
+    with the wrong state -- which is exactly how postflop calls came to render
+    as checks.
+    """
+    match = _PLAYER_ACTION.match(st.raw.strip())
+    if match is None:
+        return None  # dealer action
+    verb = match["verb"]
+    if verb in ("sm", "sd", "pb"):
+        return None  # show/muck, stand-pat/discard, bring-in
+
+    seat = int(match["actor"]) - 1
+    # The state must be the one this action faced. This is the check that turns
+    # a pairing regression into a loud failure instead of plausible numbers read
+    # from the wrong moment in the hand.
+    if st.actor_index != seat:
+        raise ReplayError(
+            f"replay misaligned at action {st.action_index} ({st.raw!r}): "
+            f"state expects seat {st.actor_index}, action is seat {seat}"
+        )
+
+    committed = st.bets[seat]
+    if verb == "f":
+        return seat, ActionType.FOLD, 0, None
+    if verb == "cc":
+        kind = ActionType.CALL if st.to_call > 0 else ActionType.CHECK
+        return seat, kind, st.to_call, committed + st.to_call
+    kind = ActionType.RAISE if st.to_call > 0 else ActionType.BET
+    to_amount = int(match["arg"] or 0)
+    return seat, kind, to_amount - committed, to_amount
+
+
 def iter_decisions(
     hh: HandHistory, *, hand_id: int = 0, actor: int | None = None
 ) -> Iterator[Decision]:
@@ -152,67 +269,31 @@ def iter_decisions(
     ordering rather than ours. That is what makes it a stable reference for
     `flagged_decisions` across re-analysis.
     """
-    # Single pass. The state is mutated in place between yields, so everything
-    # read out of it must be read here, before the loop advances.
-    for index, (state, _stale_action) in enumerate(hh.state_actions):
-        if index >= len(hh.actions):
-            break  # trailing state after the last action
-        action = hh.actions[index]
-
-        match = _PLAYER_ACTION.match(action.strip())
-        if match is None:
-            continue  # dealer action
-        verb = match["verb"]
-        if verb in ("sm", "sd", "pb"):
-            continue  # show/muck, stand-pat/discard, bring-in: not judged
-
-        seat = int(match["actor"]) - 1
+    for st in iter_action_states(hh):
+        parsed = parse_player_action(st)
+        if parsed is None:
+            continue
+        seat, kind, amount, to_amount = parsed
         if actor is not None and seat != actor:
             continue
 
-        # Everything here rests on this state being the one `action` faced. Both
-        # the off-by-one and the in-place mutation are undocumented 0.x behavior,
-        # and both fail by producing plausible numbers from the wrong moment
-        # rather than by crashing. Assert instead of trusting.
-        if state.actor_index != seat:
-            raise ReplayError(
-                f"replay misaligned at action {index} ({action!r}): "
-                f"state expects seat {state.actor_index}, action is seat {seat}"
-            )
-
-        to_call: Cents = int(state.checking_or_calling_amount or 0)
-        committed: Cents = int(state.bets[seat])
-        stack: Cents = int(state.stacks[seat])
-
-        if verb == "f":
-            kind, amount, to_amount = ActionType.FOLD, 0, None
-        elif verb == "cc":
-            # PHH collapses these; to_call is what separates them.
-            kind = ActionType.CALL if to_call > 0 else ActionType.CHECK
-            amount = to_call
-            to_amount = committed + to_call
-        else:  # cbr
-            kind = ActionType.RAISE if to_call > 0 else ActionType.BET
-            to_amount = int(match["arg"] or 0)
-            amount = to_amount - committed
-
         yield Decision(
             hand_id=hand_id,
-            action_index=index,
-            street=_STREETS[state.street_index],
+            action_index=st.action_index,
+            street=st.street,
             position=position_of(seat, len(hh.starting_stacks)),
             action=kind,
-            hole_cards=_hole(state, seat),
-            board=_board(state),
+            hole_cards=st.hole[seat],
+            board=st.board,
             amount=amount,
             to_amount=to_amount,
-            pot_before=int(state.total_pot_amount),
-            stack_before=stack,
-            to_call=to_call,
+            pot_before=st.pot,
+            stack_before=st.stacks[seat],
+            to_call=st.to_call,
             # A fold or check commits nothing, so it is never all-in -- without
             # the first clause a player already at zero chips would be reported
             # all-in for folding.
-            is_all_in=amount > 0 and amount >= stack,
+            is_all_in=amount > 0 and amount >= st.stacks[seat],
         )
 
 

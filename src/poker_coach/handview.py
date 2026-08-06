@@ -35,11 +35,11 @@ from pokerkit.notation import HandHistory
 from .models import PHH_SOURCE_TEXT, ActionType, Cents, Street
 from .solvers.base import SolutionProvider
 from .replay import (
-    _PLAYER_ACTION,
     _STREETS,
-    _board,
     big_blind,
     hero_index,
+    iter_action_states,
+    parse_player_action,
     project_index,
 )
 
@@ -275,40 +275,29 @@ def _walk(
     current_street: Street | None = None
     raises_this_street = 0
 
-    for idx, (state, _stale) in enumerate(hh.state_actions):
-        if idx >= len(hh.actions):
-            break
-        raw = hh.actions[idx]
-        match = _PLAYER_ACTION.match(raw.strip())
-        if match is None or match["verb"] in ("sm", "sd", "pb"):
+    # Pairing each action with the state it faced is `replay`'s job, not this
+    # module's. An earlier copy of that logic lived here, indexing `hh.actions`
+    # positionally, and drifted one action per street: postflop calls rendered
+    # as checks and raises as bets, with the pot numbers still adding up.
+    for st in iter_action_states(hh):
+        parsed = parse_player_action(st)
+        if parsed is None:
             continue
+        seat, kind, amount, to_amount = parsed
 
-        seat = int(match["actor"]) - 1
-        street = _STREETS[state.street_index]
+        street = st.street
         if street is not current_street:
             last_aggressor = None
             current_street = street
             raises_this_street = 0
 
-        to_call: Cents = int(state.checking_or_calling_amount or 0)
-        committed: Cents = int(state.bets[seat])
-        pot_before: Cents = int(state.total_pot_amount)
-        stack_before: Cents = int(state.stacks[seat])
-        board = _board(state)
-
-        verb = match["verb"]
-        if verb == "f":
-            kind, amount, to_amount = ActionType.FOLD, 0, None
-        elif verb == "cc":
-            kind = ActionType.CALL if to_call > 0 else ActionType.CHECK
-            amount, to_amount = to_call, committed + to_call
-        else:
-            kind = ActionType.RAISE if to_call > 0 else ActionType.BET
-            to_amount = int(match["arg"] or 0)
-            amount = to_amount - committed
+        to_call: Cents = st.to_call
+        pot_before: Cents = st.pot
+        stack_before: Cents = st.stacks[seat]
+        board = st.board
 
         entry = {
-            "action_index": idx,
+            "action_index": st.action_index,
             "seat": seat,
             "position": _position(seat, players),
             "is_hero": seat == hero,

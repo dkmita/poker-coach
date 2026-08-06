@@ -1,11 +1,16 @@
 """Tests for the pokerkit boundary.
 
 These exist mainly to catch a pokerkit upgrade breaking us. `replay.py` relies on
-three behaviors pokerkit does not document — `state_actions` being off by one,
-the `State` object being mutated in place across yields, and `street_index`
-ordering — each of which fails by producing plausible numbers from the wrong
-moment in the hand rather than by raising. Assertions on concrete pot sizes and
-action kinds are what turn that into a visible failure.
+three behaviors pokerkit does not document — `state_actions` yielding more states
+than there are actions and in a different order, the `State` object being mutated
+in place across yields, and `street_index` ordering — each of which fails by
+producing plausible numbers from the wrong moment in the hand rather than by
+raising. Assertions on concrete pot sizes and action kinds are what turn that
+into a visible failure.
+
+The heads-up tests are not redundant with the six-handed ones: pokerkit only
+interleaves its extra states mid-hand when the table is heads-up, so a six-handed
+fixture passes under a pairing that is wrong for every postflop action.
 """
 
 from __future__ import annotations
@@ -53,10 +58,44 @@ HAND = textwrap.dedent("""
 """).strip()
 
 
+# Heads-up, and the shape that exposed the pairing bug. Six-handed hands happen
+# to survive positional indexing into `hh.actions` -- pokerkit only appends its
+# extra states at the end -- but heads-up it inserts one at every postflop street
+# transition, so 16 actions come back as 21 pairs and the drift starts at the
+# flop. Hero raises the turn and calls a re-raise: with the old pairing those
+# read as a bet and a call of the wrong size, with every pot still adding up.
+HU_HAND = textwrap.dedent("""
+    variant = "NT"
+    antes = [0, 0]
+    blinds_or_straddles = [10, 5]
+    min_bet = 10
+    starting_stacks = [990, 1010]
+    actions = [
+      "d dh p1 QsTs", "d dh p2 KdAc",
+      "p1 cbr 25", "p2 cbr 100", "p1 cc",
+      "d db 9hQdQh", "p2 cbr 66", "p1 cc",
+      "d db 5s", "p2 cbr 166", "p1 cbr 332", "p2 cbr 844", "p1 cc",
+      "d db Td", "p1 sm QsTs", "p2 sm KdAc",
+    ]
+    finishing_stacks = [1930, 20]
+    currency = "USD"
+    _pc_site = "acr"
+    _pc_site_hand_id = "HU-1"
+    _pc_hero_index = 0
+""").strip()
+
+
 @pytest.fixture
 def hh(tmp_path):
     path = tmp_path / "hand.phh"
     path.write_text(HAND)
+    return load(path)
+
+
+@pytest.fixture
+def hu(tmp_path):
+    path = tmp_path / "hu.phh"
+    path.write_text(HU_HAND)
     return load(path)
 
 
@@ -80,6 +119,46 @@ def test_cc_resolves_to_check_or_call(hero_decisions):
         ActionType.CHECK,  # turn, unopened
         ActionType.BET,  # river, unopened -> bet, not raise
     ]
+
+
+def test_state_actions_is_longer_than_the_action_list(hu):
+    """The premise of the bug, asserted so a pokerkit upgrade cannot quietly
+    remove it and leave the workaround looking unnecessary."""
+    pairs = list(hu.state_actions)
+    assert len(pairs) > len(hu.actions)
+    interleaved = [i for i, (_, a) in enumerate(pairs) if a is None]
+    assert any(i < len(hu.actions) for i in interleaved), (
+        "the extra states must appear mid-hand, not only after the last action; "
+        "if they moved to the end this test no longer covers the drift"
+    )
+
+
+def test_postflop_actions_are_paired_with_the_state_they_faced(hu):
+    """The regression: positional indexing drifts one action per street.
+
+    Every kind here was wrong before the fix -- the flop call read as a check
+    and both turn raises as bets -- and none of it looked wrong, because the
+    pot sizes it printed were real pot sizes from one action earlier.
+    """
+    acts = list(iter_decisions(hu, hand_id=1))
+    got = [(d.street, d.position, d.action, d.to_call) for d in acts]
+    assert got == [
+        (Street.PREFLOP, Position.BTN, ActionType.RAISE, 5),
+        (Street.PREFLOP, Position.BB, ActionType.RAISE, 15),
+        (Street.PREFLOP, Position.BTN, ActionType.CALL, 75),
+        (Street.FLOP, Position.BB, ActionType.BET, 0),
+        (Street.FLOP, Position.BTN, ActionType.CALL, 66),
+        (Street.TURN, Position.BB, ActionType.BET, 0),
+        (Street.TURN, Position.BTN, ActionType.RAISE, 166),
+        (Street.TURN, Position.BB, ActionType.RAISE, 166),
+        (Street.TURN, Position.BTN, ActionType.CALL, 492),
+    ]
+
+
+def test_pot_advances_with_each_postflop_action(hu):
+    """The drift kept the pot one action stale, which is why it stayed plausible."""
+    turn = [d for d in iter_decisions(hu, hand_id=1) if d.street is Street.TURN]
+    assert [d.pot_before for d in turn] == [332, 498, 830, 1508]
 
 
 def test_cbr_unopened_is_a_bet_not_a_raise(hero_decisions):
