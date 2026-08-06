@@ -494,29 +494,39 @@ function renderOutcome(v) {
   if (!sd || !sd.players.length) return "";
   const rakeC = v.result.rake_cents || 0;
   const bbC = v.hand.stakes.bb_cents;
-  // Rake sits on the winning row because that is whose money it came out of.
-  // The percentage is of the pre-rake win -- net plus the rake -- which is what
-  // the winner would have taken home had the house not dropped. Measuring it
-  // against the post-rake net instead understates the bite on every hand.
-  // Split pots award twice; the rake was taken once, so it prints once.
+  // Winning the pot and finishing ahead are different things, and the label is
+  // for the first. Chopped pots are the case that separates them: after rake
+  // both winners are usually down, so a row can read "-0.2bb CHOP" and be
+  // exactly right. Saying CHOP rather than WON is what stops that looking wrong.
+  const label = (p) => p.won
+    ? ` <span class="allin">${sd.chopped ? "CHOP" : "WON"}</span>` : "";
+  // Rake once, on the first winning row -- it came out of the pot they were
+  // paid from, however many of them there were. The percentage is of the
+  // pre-rake payout (everything collected, plus the rake), which is what would
+  // have been paid out had the house not dropped.
+  const paid = sd.players.reduce((n, p) => n + (p.collected_cents || 0), 0);
   let raked = false;
   const rakeTag = (p) => {
     if (!p.won || raked) return "";
     raked = true;
-    const gross = p.net_cents + rakeC;
     if (!rakeC) return ' <span class="rake dimnote">no rake</span>';
+    // Fall back to this winner's own pre-rake net when the site did not record
+    // who collected -- right whenever the pot was not chopped.
+    const gross = paid ? paid + rakeC : p.net_cents + rakeC;
     const pct = gross > 0 ? ` · ${(100 * rakeC / gross).toFixed(1)}%` : "";
     return ` <span class="rake" title="${money(rakeC)} — ${
-      pct ? "share of the pre-rake win" : "pre-rake win unknown"}">rake ${
+      pct ? "share of the pre-rake payout" : "pre-rake payout unknown"}">rake ${
       (rakeC / bbC).toFixed(2)}bb${pct}</span>`;
   };
   const rows = sd.players
-    .slice().sort((a, b) => b.net_cents - a.net_cents)
+    // Winners first, then by net. Sorting on net alone buries a chopped winner
+    // below a player who folded a blind and lost less than they did.
+    .slice().sort((a, b) => (b.won - a.won) || (b.net_cents - a.net_cents))
     .map(p => `<div class="act tally${p.is_hero ? " hero" : ""}">
         <div class="who">${p.position}</div>
         <div>${p.cards ? faces(p.cards) : '<span class="none">did not show</span>'}</div>
         <div class="size ${netClass(p.net_bb)}">${p.net_bb > 0 ? "+" : ""}${p.net_bb}bb${
-          p.won ? ' <span class="allin">WON</span>' : ""}${rakeTag(p)}</div>
+          label(p)}${rakeTag(p)}</div>
       </div>`).join("");
   return `<h3>Outcome</h3>
     <div class="street"><header>

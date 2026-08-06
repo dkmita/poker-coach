@@ -49,6 +49,10 @@ PHH_SOURCE_FILE = "_pc_source_file"
 # one place that can be wrong in a way nothing downstream can detect: if a
 # pot or a position looks off, the only way to settle it is the original.
 PHH_SOURCE_TEXT = "_pc_source_text"
+# Who the site paid out of the pot, and how much, as "seat:cents,seat:cents".
+# Not derivable from finishing stacks, which net a payout against the money the
+# player put in -- in a raked chop both winners finish behind.
+PHH_COLLECTED = "_pc_collected"
 # PHH is player-neutral by design -- it archives a hand, not one player's view of
 # it -- so "hero" is our concept and has to be carried as an extension. 0-based,
 # matching PHH's player ordering (`p1` is index 0).
@@ -113,8 +117,9 @@ def position_of(player_index: int, players_dealt: int) -> Position:
     the big blind, and the button is last. `blinds_or_straddles` encodes this, so
     position follows from the index and the player count alone.
 
-    Heads up is the special case worth remembering -- the button posts the small
-    blind, so index 0 *is* the button.
+    Heads up is the special case worth remembering, and it runs the other way
+    from what the rule above suggests: index 0 is the **big** blind and index 1
+    the button. See the comment in the body for why that is forced.
     """
     try:
         layout = POSITIONS_BY_PLAYER_COUNT[players_dealt]

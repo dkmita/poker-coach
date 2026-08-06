@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from pokerkit.notation import HandHistory
 
 from ...models import (
+    PHH_COLLECTED,
     PHH_HERO_INDEX,
     PHH_SITE,
     PHH_SITE_HAND_ID,
@@ -64,6 +65,9 @@ _STREET = re.compile(r"^\*\*\* (?P<street>FLOP|TURN|RIVER) \*\*\*(?P<rest>.*)")
 _CARDS_IN = re.compile(r"\[([^\]]+)\]")
 _SHOWS = re.compile(r"^(?P<name>.+?) shows \[(?P<cards>[^\]]+)\]")
 _RAKE = re.compile(r"Rake \$(?P<rake>[\d.]+)(?: \| JP Fee \$(?P<jp>[\d.]+))?")
+# "kiniatim collected $1.05 from main pot" -- one line per player per pot, so a
+# split pot produces two and a side pot adds more. Summed per player.
+_COLLECTED = re.compile(r"^(?P<name>.+?) collected \$(?P<amt>[\d.]+) from ")
 
 _FOLD = re.compile(r"^(?P<name>.+?) folds\s*$")
 _CHECK = re.compile(r"^(?P<name>.+?) checks\s*$")
@@ -103,6 +107,10 @@ class _Hand:
     # ("", "board", cards).
     actions: list[tuple[str, str, str]] = field(default_factory=list)
     rake: Cents = 0
+    # What each player was actually paid, net of rake, as the site states it.
+    # A player can collect and still finish the hand down: in a raked chop both
+    # winners get back less than they put in.
+    collected: dict[str, Cents] = field(default_factory=dict)
     dead_posts: set[str] = field(default_factory=set)
     source: str = ""
 
@@ -171,6 +179,9 @@ def _scan(block: str) -> _Hand:
             # bare "Unable to repair the hand history" with nothing pointing at
             # the cause.
             h.actions.append((m["name"], "sm", cards))
+            continue
+        if m := _COLLECTED.match(line):
+            h.collected[m["name"]] = h.collected.get(m["name"], 0) + cents(m["amt"])
             continue
         if m := _RAKE.search(line) and line.startswith("Total pot"):
             m = _RAKE.search(line)
@@ -340,6 +351,14 @@ def to_phh(block: str, *, source_file: str = "") -> HandHistory:
             # PHH has no rake field, and ACR states it -- so it is recorded
             # rather than reconstructed from finishing stacks.
             "_pc_rake_cents": h.rake,
+            # Who was paid, and how much, net of rake. Recorded because it is
+            # not recoverable from finishing stacks: a winner in a raked chop
+            # finishes *down*, so "ended ahead" and "won the pot" are different
+            # questions and only the site can answer the second.
+            PHH_COLLECTED: ",".join(
+                f"{index[n]}:{c}" for n, c in sorted(h.collected.items())
+                if n in index
+            ),
             # The original ACR text, kept verbatim. The parser will improve and
             # PHH is lossy about anything the format does not model (summary
             # lines, hand descriptions, the site's own rake breakdown), so the
@@ -372,13 +391,33 @@ def to_phh(block: str, *, source_file: str = "") -> HandHistory:
 
     if final is not None:
         finishing = [int(x) for x in final.stacks]
-        # pokerkit ran with no rake configured, so the winner was paid the whole
-        # pot. ACR states the real figure, so take it off the biggest winner.
-        # Exact for a single pot; a split pot would need per-pot attribution,
-        # which this sample has no example of.
+        # pokerkit ran with no rake configured, so the pot was paid out whole.
+        # ACR states the real figure, and states who collected -- so charge it to
+        # the players who were actually paid, split in proportion to what each
+        # took. Charging it all to the biggest *gainer* was wrong twice over in a
+        # raked chop: both winners can finish behind, so the biggest gainer may
+        # be someone who only posted a blind, and even when it isn't, one winner
+        # ends up paying the other's rake. Hand 2794341035 chopped a $2.19 pot
+        # and reported the two winners at 0 and -9 instead of -5 and -4.
         if h.rake:
-            gains = [f - s for f, s in zip(finishing, starting)]
-            finishing[gains.index(max(gains))] -= h.rake
+            paid = {index[n]: c for n, c in h.collected.items() if n in index}
+            total = sum(paid.values())
+            if total > 0:
+                # Largest-remainder, so the shares sum to the rake exactly rather
+                # than drifting a cent on every chopped pot.
+                exact = {i: h.rake * c / total for i, c in paid.items()}
+                share = {i: int(v) for i, v in exact.items()}
+                for i in sorted(
+                    share, key=lambda i: exact[i] - share[i], reverse=True
+                )[: h.rake - sum(share.values())]:
+                    share[i] += 1
+                for i, amount in share.items():
+                    finishing[i] -= amount
+            else:
+                # No collected lines (older exports, or a hand that never got
+                # to a showdown summary). Fall back to the biggest gainer.
+                gains = [f - s for f, s in zip(finishing, starting)]
+                finishing[gains.index(max(gains))] -= h.rake
         hh.finishing_stacks = finishing
     return hh
 

@@ -32,7 +32,7 @@ from typing import Any
 
 from pokerkit.notation import HandHistory
 
-from .models import PHH_SOURCE_TEXT, ActionType, Cents, Street
+from .models import PHH_COLLECTED, PHH_SOURCE_TEXT, ActionType, Cents, Street
 from .solvers.base import SolutionProvider
 from .replay import (
     _STREETS,
@@ -181,12 +181,26 @@ def _showdown(hh: HandHistory, bb: Cents, hero: int, players: int) -> dict:
         int(finishing[i]) - int(s) if i < len(finishing) else 0
         for i, s in enumerate(hh.starting_stacks)
     ]
-    best = max(nets) if nets else 0
+
+    # Winning the pot and finishing ahead are different questions, and only the
+    # first is what "WON" means. In a raked chop both winners are paid less than
+    # they put in, so a net-based test names nobody the winner -- and picks the
+    # largest net, which can be a seat that folded its blind and lost least.
+    collected = _collected(hh)
+    if collected:
+        def won(i: int) -> bool:
+            return collected.get(i, 0) > 0
+    else:
+        # No record of who was paid (the synthetic corpus). Fall back to net,
+        # which is right whenever the pot was not chopped.
+        best = max(nets) if nets else 0
+        def won(i: int) -> bool:
+            return nets[i] > 0 and nets[i] == best
 
     # Only players who were actually in the hand. A seat that folded for free
     # has nothing to report, and four rows of "0bb" bury the two that matter.
     def took_part(i: int) -> bool:
-        return nets[i] != 0 or i in showed
+        return nets[i] != 0 or i in showed or i in collected
 
     return {
         "board": [board[i : i + 2] for i in range(0, len(board), 2)],
@@ -205,12 +219,34 @@ def _showdown(hh: HandHistory, bb: Cents, hero: int, players: int) -> dict:
                 "showed": i in showed,
                 "net_cents": nets[i],
                 "net_bb": _bb(nets[i], bb),
-                "won": nets[i] > 0 and nets[i] == best,
+                # What this player was paid out of the pot, net of rake. None
+                # when unrecorded -- which is not the same as zero.
+                "collected_cents": collected.get(i) if collected else None,
+                "collected_bb": _bb(collected[i], bb) if i in collected else None,
+                "won": won(i),
             }
             for i in range(players)
             if took_part(i)
         ],
+        # More than one player paid out of the pot. Worth saying out loud: a
+        # chop where both winners finish behind reads as a bug otherwise.
+        "chopped": len(collected) > 1,
     }
+
+
+def _collected(hh: HandHistory) -> dict[int, Cents]:
+    """Seat -> amount paid out of the pot, from the site's own summary.
+
+    Empty when the archive does not record it. Not derivable from finishing
+    stacks: they net a payout against what the player put in.
+    """
+    raw = str(hh.user_defined_fields.get(PHH_COLLECTED) or "")
+    out: dict[int, Cents] = {}
+    for part in raw.split(","):
+        if ":" in part:
+            seat, _, amount = part.partition(":")
+            out[int(seat)] = int(amount)
+    return out
 
 
 def _position(i: int, players: int) -> str:

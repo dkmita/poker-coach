@@ -15,7 +15,7 @@ from poker_coach.ingest.parsers.acr import (
     ParseError, cents, dumps_phh, parse, split_hands, to_phh,
 )
 from poker_coach.models import (
-    PHH_HERO_INDEX, PHH_SITE_HAND_ID, Position, position_of,
+    PHH_COLLECTED, PHH_HERO_INDEX, PHH_SITE_HAND_ID, Position, position_of,
 )
 from poker_coach.replay import hero_index, iter_decisions
 from pokerkit.notation import HandHistory
@@ -113,6 +113,41 @@ HERO_LIVE_POST = textwrap.dedent("""
 """).strip()
 
 
+# A chopped pot, which is the case that breaks every "one winner" assumption.
+# Both players make the same straight and are paid 9c out of a 22c pot; after 4c
+# of rake they each finish 1c *down* despite winning.
+CHOPPED = textwrap.dedent("""
+    Hand #1006 - Holdem (No Limit) - $0.02/$0.04 - 2026/08/06 15:26:29 UTC
+    Table1 6-max Seat #3 is the button
+    Seat 1: Villain2 ($2.00)
+    Seat 2: HeroName ($2.00)
+    Seat 3: Villain1 ($3.87)
+    Villain2 posts the small blind $0.02
+    HeroName posts the big blind $0.04
+    *** HOLE CARDS ***
+    Dealt to HeroName [6s Kh]
+    Villain1 raises $0.06 to $0.10
+    Villain2 folds
+    HeroName calls $0.06
+    *** FLOP *** [Jh Qc 4h]
+    HeroName checks
+    Villain1 checks
+    *** TURN *** [Jh Qc 4h] [Td]
+    HeroName checks
+    Villain1 checks
+    *** RIVER *** [Jh Qc 4h Td] [As]
+    HeroName checks
+    Villain1 checks
+    *** SHOW DOWN ***
+    Villain1 shows [6d Kd] (a straight, Ace high [As Kd Qc Jh Td])
+    HeroName shows [6s Kh] (a straight, Ace high [As Kh Qc Jh Td])
+    Villain1 collected $0.09 from main pot
+    HeroName collected $0.09 from main pot
+    *** SUMMARY ***
+    Total pot $0.22 | Rake $0.04
+""").strip()
+
+
 def test_cents_never_goes_through_float():
     assert cents("$0.05") == 5
     assert cents("$19.30") == 1930
@@ -159,6 +194,36 @@ def test_players_not_dealt_in_are_excluded():
     """
     hh = to_phh(SITTING_OUT)
     assert hh.players == ["Villain1", "HeroName"]
+
+
+def test_chopped_pot_charges_rake_to_both_winners():
+    """Rake comes out of the pot, so it is charged to whoever was paid from it.
+
+    Charging it all to the biggest *gainer* was wrong twice over here: after rake
+    both winners are down a cent, so the biggest gainer is whichever of them the
+    rounding favoured -- and that one would have paid the other's rake too.
+    """
+    hh = to_phh(CHOPPED)
+    i = {n: k for k, n in enumerate(hh.players)}
+    assert hh.user_defined_fields["_pc_rake_cents"] == 4
+    collected = dict(
+        p.split(":") for p in hh.user_defined_fields[PHH_COLLECTED].split(",")
+    )
+    assert {int(k): int(v) for k, v in collected.items()} == {
+        i["Villain1"]: 9, i["HeroName"]: 9
+    }
+    # 2c each, not 4c off one of them. These are the site's own numbers.
+    assert hh.finishing_stacks[i["HeroName"]] == 199
+    assert hh.finishing_stacks[i["Villain1"]] == 386
+    assert hh.finishing_stacks[i["Villain2"]] == 198  # posted the sb and folded
+    # Everything that left the table is the rake.
+    assert sum(hh.starting_stacks) - sum(hh.finishing_stacks) == 4
+
+
+def test_rake_shares_sum_to_the_rake_exactly():
+    """Largest-remainder, so a chop cannot lose or invent a cent to rounding."""
+    hh = to_phh(CHOPPED.replace("Rake $0.04", "Rake $0.03"))
+    assert sum(hh.starting_stacks) - sum(hh.finishing_stacks) == 3
 
 
 def test_rake_includes_the_jackpot_fee():

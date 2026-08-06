@@ -236,6 +236,29 @@ def test_actions_carry_the_actors_cards_when_known(view):
     assert any(a["cards"] is None for a in acts if not a["is_hero"])
 
 
+def test_a_chopped_pot_has_two_winners_who_both_finished_down(tmp_path):
+    """Winning the pot and finishing ahead are different questions.
+
+    After rake, each half of a chop is worth less than what went in, so a
+    net-based test for "won" names nobody -- and its idea of the best result is
+    the player who folded a blind and lost least of all.
+    """
+    from poker_coach.ingest.parsers.acr import to_phh
+    from tests.test_acr import CHOPPED
+
+    hh = to_phh(CHOPPED)
+    sd = handview.build(hh)["showdown"]
+    assert sd["chopped"] is True
+    winners = [p for p in sd["players"] if p["won"]]
+    assert len(winners) == 2
+    assert all(p["collected_cents"] == 9 for p in winners)
+    assert all(p["net_cents"] < 0 for p in winners), "both are paid less than they put in"
+    # And the seat that folded its small blind is not among them, despite
+    # losing the least of the three.
+    assert max(p["net_cents"] for p in sd["players"]) == -1
+    assert not any(p["won"] for p in sd["players"] if p["collected_cents"] is None)
+
+
 def test_unrevealed_hands_are_null_not_invented(view):
     """A villain who folded keeps their cards; inferring them would be fiction."""
     unknown = [p for p in view["showdown"]["players"] if p["cards"] is None]
