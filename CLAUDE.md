@@ -10,9 +10,10 @@ Early. What exists and works:
 - `corpus/schema.sql` — verified on SQLite 3.51 (7 tables, 2 views)
 - `replay.py` — the pokerkit boundary
 - `handview.py` — one hand as a JSON contract for a UI (`tools/show_hand.py` renders it)
-- `solvers/base.py` — `SolutionProvider` protocol + `NullProvider`; no real provider yet
+- `solvers/base.py` — `SolutionProvider` protocol + `NullProvider`
+- `solvers/ranges.py` — `ChartProvider`: reads PioSolver-format range exports from `charts/`
 - `tools/generate_corpus.py` — synthetic PHH corpus with planted, labelled mistakes
-- `pyproject.toml` — `pokerkit>=0.7,<0.8`, Python ≥ 3.11; 33 tests passing
+- `pyproject.toml` — `pokerkit>=0.7,<0.8`, Python ≥ 3.11; 43 tests passing
 
 Not written yet: the ACR/WPN parser, the three pipeline stages, the range charts, and the CLI.
 Everything below describing those is agreed design, not shipped code — update this file as they
@@ -140,6 +141,24 @@ Numbers that are arithmetically defined but conventionally meaningless are suppr
 computed: no SPR preflop (the pot is just blinds), no `pct_pot` on a preflop raise (those are
 read as multiples of the blind). "SPR 24.8" on a preflop fold is noise dressed as information,
 and a poker player reading the UI would clock it as a bug.
+
+### GTO Wizard: export, do not automate
+
+Checked, with sources, rather than assumed:
+
+- Their ToS prohibits "automated requests or any scripts within the Service"
+  (<https://gtowizard.com/terms/>), with immediate suspension as the stated remedy.
+- Their public API is a **benchmarking** API — connect an agent, play hands, get results. It
+  deliberately excludes solver access and refuses requests for it
+  (<https://gtowizard.com/benchmark/terms>).
+
+The supported path is the product's own export: Ranges tab → copy button → standard
+PioSolver/GTO+ text (<https://help.gtowizard.com/ranges-tab/>). Save one file per action under
+`charts/<spot_key>/` and `ChartProvider` reads it.
+
+This is also the better integration on the merits: no credentials in the tool, nothing to break
+when they redesign a page, works offline and in CI, and the same format comes out of TexasSolver
+and GTO+ — so one importer serves every source. Don't replace it with a scraper.
 
 ### Where data lives
 
