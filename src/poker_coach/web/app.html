@@ -26,8 +26,9 @@
     font-weight: 650;
   }
   .filt:hover { color: var(--text); }
-  .filt.on { color: var(--bad); border-color: rgba(224,108,117,.5); background: rgba(224,108,117,.12); }
-  .filt[data-f="all"].on { color: var(--text); border-color: var(--dim); background: var(--panel-2); }
+  .filt.on { color: var(--text); border-color: var(--dim); background: var(--panel-2); }
+  .filt.bad.on  { color: var(--bad);  border-color: rgba(224,108,117,.5); background: rgba(224,108,117,.12); }
+  .filt.warn.on { color: var(--warn); border-color: rgba(216,166,87,.5);  background: rgba(216,166,87,.12); }
   #tabs { display: flex; border-bottom: 1px solid var(--line); }
   .tab {
     flex: 1; background: none; border: 0; color: var(--dim); cursor: pointer;
@@ -83,6 +84,11 @@
     display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 999px;
     font-size: 10px; font-weight: 650; color: var(--bad);
     background: rgba(224,108,117,.12); border: 1px solid rgba(224,108,117,.35);
+  }
+  /* Interest is a nudge to look, not a criticism -- it must not read as an error. */
+  .row .flag.note {
+    color: var(--dim); background: var(--panel-2); border-color: var(--line);
+    margin-left: 4px;
   }
   .pos-net { color: var(--good); } .neg-net { color: var(--bad); } .zero-net { color: var(--dim); }
   .group {
@@ -191,7 +197,7 @@
 <body>
   <div id="list">
     <div id="tabs"><button class="tab on" data-tab="hands">Hands</button><button class="tab" data-tab="charts">Charts</button></div>
-    <div id="filters"><button class="filt on" data-f="all">All</button><button class="filt" data-f="flagged">To review</button></div>
+    <div id="filters"><button class="filt on" data-f="all">All</button><button class="filt bad" data-f="flagged">Preflop</button><button class="filt warn" data-f="interesting">Interesting</button></div>
     <div id="rows"></div><div id="more">load more</div>
   </div>
   <div id="detail"><div class="empty">Select a hand</div></div>
@@ -206,7 +212,7 @@ let listMode = null;
 // "To review" shows only hands with an off-chart preflop action. Filtering is
 // server-side and applied before pagination -- filtering the loaded page would
 // report a count that is not the archive's.
-let onlyFlagged = false;
+let filterKind = "all";
 // 9-handed-only charts are reference material for a game you don't play.
 let showRef = false;
 
@@ -227,14 +233,15 @@ const netClass = (n) => n > 0 ? "pos-net" : n < 0 ? "neg-net" : "zero-net";
 async function loadList() {
   if (listMode !== "hands") { $("#rows").innerHTML = ""; offset = 0; listMode = "hands"; }
   $("#filters").style.display = "flex";
-  const r = await fetch(
-    `/api/hands?offset=${offset}&limit=60${onlyFlagged ? "&flagged=1" : ""}`
-  ).then(r => r.json());
-  if (r.flagged_total !== null && r.flagged_total !== undefined) {
-    $(`.filt[data-f="flagged"]`).textContent = `To review (${r.flagged_total})`;
+  const r = await fetch(`/api/hands?offset=${offset}&limit=60&filter=${filterKind}`)
+    .then(r => r.json());
+  const LABEL = { flagged: "Preflop", interesting: "Interesting" };
+  for (const [k, n] of Object.entries(r.counts || {})) {
+    const b = $(`.filt[data-f="${k}"]`);
+    if (b) b.textContent = `${LABEL[k]} (${n})`;
   }
-  if (onlyFlagged && !r.rows.length && !offset) {
-    $("#rows").innerHTML = `<div class="row"><div></div><div class="meta">No off-chart preflop actions.</div><div></div></div>`;
+  if (filterKind !== "all" && !r.rows.length && !offset) {
+    $("#rows").innerHTML = `<div class="row"><div></div><div class="meta">Nothing matches.</div><div></div></div>`;
   }
   total = r.total;
   for (const row of r.rows) {
@@ -249,8 +256,11 @@ async function loadList() {
         <div class="pos">${row.position}</div>
         <div>${hole(row.hole_cards)}
           <div class="meta">${row.hero_street_reached} · ${row.eff_stack_bb}bb</div>
-          ${off.length ? `<div class="flag" title="${off.join("; ")}">preflop off chart${
-            off.length > 1 ? ` ×${off.length}` : ""}</div>` : ""}</div>
+          ${off.length ? `<div class="flag" title="${off.join("; ")}">preflop${
+            off.length > 1 ? ` ×${off.length}` : ""}</div>` : ""}${
+            (row.interest || []).length ? `<div class="flag note" title="${
+              row.interest.join("; ")}">${row.interest[0]}${
+              row.interest.length > 1 ? ` +${row.interest.length - 1}` : ""}</div>` : ""}</div>
         <div class="net ${netClass(row.hero_net_bb)}">${row.hero_net_bb > 0 ? "+" : ""}${row.hero_net_bb}</div>`;
     }
     el.onclick = () => open(row.file, el);
@@ -503,7 +513,7 @@ document.querySelectorAll(".tab").forEach(t => {
 document.querySelectorAll(".filt").forEach(b => {
   b.onclick = () => {
     document.querySelectorAll(".filt").forEach(x => x.classList.toggle("on", x === b));
-    onlyFlagged = b.dataset.f === "flagged";
+    filterKind = b.dataset.f;
     listMode = null;          // force the list to rebuild from the top
     loadList();
   };

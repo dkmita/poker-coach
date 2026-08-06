@@ -115,13 +115,13 @@ def test_clean_hands_carry_an_empty_flag_list(server):
 def test_flagged_filter_applies_before_pagination(server):
     """Filtering the loaded page would report a count that isn't the archive's."""
     all_hands = get(server, "/api/hands")
-    flagged = get(server, "/api/hands?flagged=1")
+    flagged = get(server, "/api/hands?filter=flagged")
     assert flagged["archive_total"] == all_hands["total"]
     assert flagged["total"] == len(flagged["rows"])
     assert all(r["preflop_off_chart"] for r in flagged["rows"])
 
 
-def test_flagged_total_is_null_until_the_filter_is_used(tmp_path):
+def test_counts_are_empty_until_a_filter_is_used(tmp_path):
     """Counting means replaying the whole archive, so the first page load
     must not pay for it."""
     from http.server import ThreadingHTTPServer
@@ -136,7 +136,24 @@ def test_flagged_total_is_null_until_the_filter_is_used(tmp_path):
     Thread(target=httpd.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{httpd.server_port}"
     try:
-        assert get(base, "/api/hands")["flagged_total"] is None
-        assert get(base, "/api/hands?flagged=1")["flagged_total"] == 0
+        assert get(base, "/api/hands")["counts"] == {}
+        assert get(base, "/api/hands?filter=flagged")["counts"] == {"flagged": 0}
     finally:
         httpd.shutdown()
+
+
+def test_interesting_filter_is_hero_centric(server):
+    """A big pot hero folded out of has nothing to review in it.
+
+    An early version tested the table's pot and all-ins, and flagged a 96bb pot
+    where hero's net was zero -- the same hero-vs-hand confusion that made a
+    preflop fold report as "reached river".
+    """
+    d = get(server, "/api/hands?filter=interesting")
+    for row in d["rows"]:
+        assert row["interest"], row["file"]
+
+
+def test_unknown_filter_falls_back_to_all(server):
+    assert get(server, "/api/hands?filter=nonsense")["total"] == \
+        get(server, "/api/hands")["total"]

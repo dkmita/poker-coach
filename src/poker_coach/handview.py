@@ -147,6 +147,7 @@ def build(
             "rake_cents": index.rake,
         },
         "showdown": _showdown(hh, bb, hero, players),
+        "interest": _interest(streets, hero_decisions, index, bb),
         # Filled by the analyze stage. Present and null so a client can rely on
         # the key existing rather than probing for it.
         "analysis": None,
@@ -351,6 +352,7 @@ def _walk(
                 "level": escalation[level] if street is Street.PREFLOP else kind.value,
                 "to_bb": entry["to_bb"],
                 "pct_pot": entry["pct_pot"],
+                "all_in": entry["is_all_in"],
             }
 
     # A street that was dealt but never acted on -- an all-in runout -- still
@@ -570,3 +572,49 @@ def _verdict(hero_action: str, solution) -> dict:
         "hand": solution.hand,
         "source": solution.provider,
     }
+
+
+# Thresholds for "worth another look". Set against a real session rather than
+# picked: the median pot there was under 5bb and hero was out preflop in 80% of
+# hands, so these pick out the tail without swamping it.
+_DEEP_INVESTED_BB = 10.0
+_BIG_SWING_BB = 10.0
+_MANY_DECISIONS = 3
+
+
+def _interest(streets: list[dict], decisions: list[dict], index: HandIndex, bb: Cents) -> dict:
+    """Was this hand worth reviewing, and why.
+
+    Every test is about **hero**, not the table. A 96bb pot hero folded out of on
+    the first action has nothing in it to learn from, and an early version
+    flagged exactly those -- the same hero-vs-hand confusion that made a preflop
+    fold report as "reached river, showdown".
+
+    Reasons are returned alongside the verdict because an opaque score is
+    unusable: you cannot tell whether to trust a filter that will not say why it
+    fired.
+    """
+    invested = sum(d["amount_bb"] or 0 for d in decisions)
+    faced_all_in = any(
+        (d["facing"] or {}).get("all_in") and (d["to_call_bb"] or 0) > 0
+        for d in decisions
+    )
+    went_all_in = any(
+        a["is_all_in"] for s in streets for a in s["actions"] if a["is_hero"]
+    )
+
+    reasons: list[str] = []
+    if index.street_reached is not Street.PREFLOP and any(
+        d["street"] != "preflop" for d in decisions
+    ):
+        reasons.append("played postflop")
+    if invested >= _DEEP_INVESTED_BB:
+        reasons.append(f"{invested:.0f}bb invested")
+    if abs(index.hero_net / bb) >= _BIG_SWING_BB:
+        reasons.append("big swing")
+    if faced_all_in or went_all_in:
+        reasons.append("all-in")
+    if len(decisions) >= _MANY_DECISIONS:
+        reasons.append(f"{len(decisions)} decisions")
+
+    return {"interesting": bool(reasons), "reasons": reasons, "invested_bb": round(invested, 1)}

@@ -50,7 +50,7 @@ class Archive:
         self.files: dict[str, Path] = {
             p.name: p for p in sorted(root.glob("*.phh"))
         }
-        self._flagged: list[str] | None = None
+        self._index: dict[str, list[str]] = {}
 
     def view(self, name: str) -> dict | None:
         path = self.files.get(name)
@@ -68,19 +68,28 @@ class Archive:
         view["file"] = name
         return view
 
-    def flagged_files(self) -> list[str]:
-        """Files with at least one off-chart preflop action.
+    def filtered(self, kind: str) -> list[str]:
+        """Files matching a review filter.
 
         Filtering has to happen before pagination or the count is a lie -- a page
         of 60 showing "3 flagged" when the archive holds 13 is worse than no
-        filter. That means replaying every hand, so the result is memoised and
-        only computed when the filter is actually used.
+        filter. That means replaying every hand, so the index is memoised and
+        built only when a filter is actually used.
         """
-        if self._flagged is None:
-            self._flagged = [
-                name for name in self.files if self._off_chart(self._build(name))
+        if kind not in self._index:
+            self._index[kind] = [
+                name for name in self.files if self._matches(kind, self._build(name))
             ]
-        return self._flagged
+        return self._index[kind]
+
+    def _matches(self, kind: str, view: dict | None) -> bool:
+        if not view or "error" in view:
+            return False
+        if kind == "flagged":
+            return bool(self._off_chart(view))
+        if kind == "interesting":
+            return bool(view["interest"]["interesting"])
+        return True
 
     @staticmethod
     def _off_chart(view: dict | None) -> list[str]:
@@ -92,13 +101,13 @@ class Archive:
             if d["street"] == "preflop" and (d.get("verdict") or {}).get("tone") == "bad"
         ]
 
-    def summaries(self, offset: int, limit: int, *, flagged: bool = False) -> dict:
+    def summaries(self, offset: int, limit: int, *, kind: str = "all") -> dict:
         """Lightweight rows for the list pane.
 
         Built per page rather than for the whole archive at startup: a 2000-hand
         corpus would cost a few seconds of replay to show fifty rows.
         """
-        source = self.flagged_files() if flagged else list(self.files)
+        source = list(self.files) if kind == "all" else self.filtered(kind)
         rows = []
         for name in source[offset : offset + limit]:
             # The same cached view the detail pane uses. Building it here costs a
@@ -122,14 +131,15 @@ class Archive:
                     "hero_net_bb": r["hero_net_bb"],
                     "eff_stack_bb": round(h["hero"]["eff_stack_bb"]),
                     "preflop_off_chart": off,
+                    "interest": view["interest"]["reasons"],
                 }
             )
         return {
             "total": len(source),
             "archive_total": len(self.files),
-            # Only known once the filter has been used; null until then, so the
+            # Only known once a filter has been used; null until then, so the
             # first page load never pays for a full-archive replay.
-            "flagged_total": len(self._flagged) if self._flagged is not None else None,
+            "counts": {k: len(v) for k, v in self._index.items()},
             "offset": offset,
             "rows": rows,
         }
@@ -181,8 +191,10 @@ def make_handler(archive: Archive):
             if url.path == "/api/hands":
                 offset = int(query.get("offset", ["0"])[0])
                 limit = min(int(query.get("limit", ["60"])[0]), 200)
-                flagged = query.get("flagged", ["0"])[0] in ("1", "true")
-                self._json(archive.summaries(offset, limit, flagged=flagged))
+                kind = query.get("filter", ["all"])[0]
+                if kind not in ("all", "flagged", "interesting"):
+                    kind = "all"
+                self._json(archive.summaries(offset, limit, kind=kind))
                 return
 
             if url.path == "/api/charts":
