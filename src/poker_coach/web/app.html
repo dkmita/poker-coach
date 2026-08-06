@@ -177,16 +177,10 @@
     font-size: 11px; letter-spacing: .09em; text-transform: uppercase;
     color: var(--dim); font-weight: 700; min-width: 62px;
   }
-  .street .pot { margin-left: auto; color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .street .pot { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
   .act {
-    display: grid; grid-template-columns: 58px 52px 64px 92px 1fr; gap: 10px;
+    display: grid; grid-template-columns: 52px 64px 92px 1fr; gap: 10px;
     padding: 6px 14px; border-top: 1px solid #23262d; align-items: baseline;
-  }
-  /* Right-aligned so the decimal points line up and the pot reads as a running
-     column down the street rather than five unrelated numbers. */
-  .act .potnow {
-    color: var(--dim); font-size: 12px; text-align: right;
-    font-variant-numeric: tabular-nums;
   }
   /* Fixed cards column, not auto: a face-down single card is narrower than two
      face-up ones, and an auto column would step the action verbs in and out
@@ -202,7 +196,7 @@
   .act.hero { background: rgba(110,168,254,.07); }
   details.act { display: block; padding: 0; }
   details.act > summary {
-    display: grid; grid-template-columns: 58px 52px 64px 92px 1fr auto auto; gap: 10px;
+    display: grid; grid-template-columns: 52px 64px 92px 1fr auto auto; gap: 10px;
     align-items: baseline; padding: 6px 14px; cursor: pointer; list-style: none;
   }
   details.act > summary::-webkit-details-marker { display: none; }
@@ -240,6 +234,36 @@
   .verdict.ok   { color: var(--warn); border-color: rgba(216,166,87,.4);  background: rgba(216,166,87,.10); }
   .verdict.bad  { color: var(--bad);  border-color: rgba(224,108,117,.4); background: rgba(224,108,117,.12); }
   .verdict:hover { filter: brightness(1.25); }
+  [hidden] { display: none !important; }
+
+  /* Chart modal. A verdict is checked mid-read, so following it should not cost
+     the hand you were looking at -- the old link navigated away and coming back
+     meant the browser's back button. */
+  #overlay {
+    position: fixed; inset: 0; z-index: 50; padding: 6vh 20px;
+    background: rgba(9,11,14,.74); display: flex; justify-content: center;
+    align-items: flex-start; overflow: auto;
+  }
+  #overlay .sheet {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    width: 100%; max-width: 700px; padding: 16px 20px 22px;
+    box-shadow: 0 24px 70px rgba(0,0,0,.55);
+  }
+  #overlay header {
+    display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px;
+  }
+  #overlay h2 { flex: 1; margin: 0; font-size: 15px; font-weight: 650; }
+  #overlay h2 small { display: block; color: var(--dim); font-size: 12px; font-weight: 400; }
+  .sheetclose {
+    flex: none; background: none; border: 0; color: var(--dim); cursor: pointer;
+    font-size: 22px; line-height: 1; padding: 0 4px;
+  }
+  .sheetclose:hover { color: var(--text); }
+  #overlay .notesread {
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+    color: var(--dim); font-size: 12px; white-space: pre-wrap;
+  }
+  #overlay .full { display: inline-block; margin-top: 14px; font-size: 12px; color: var(--hero); }
   .facts { display: flex; flex-wrap: wrap; gap: 8px; }
   .fact {
     background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
@@ -268,9 +292,8 @@
     #list { border-right: 0; border-bottom: 1px solid var(--line); }
     #detail { padding: 18px 16px 48px; }
     /* Let the action rows reflow rather than hold three rigid columns. */
-    .act { grid-template-columns: 52px 46px 60px 76px 1fr; gap: 8px; padding: 6px 12px; }
+    .act { grid-template-columns: 46px 60px 76px 1fr; gap: 8px; padding: 6px 12px; }
     .street > header { flex-wrap: wrap; gap: 8px; }
-    .street .pot { margin-left: 0; }
     .freq { grid-template-columns: 52px 1fr 40px; }
   }
 </style>
@@ -283,6 +306,12 @@
   </div>
   <div id="detail"><div class="empty">Select a hand</div></div>
 
+<div id="overlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheettitle">
+    <header><h2 id="sheettitle"></h2><button class="sheetclose" title="Close (Esc)">&times;</button></header>
+    <div id="sheetbody"></div>
+  </div>
+</div>
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 let offset = 0, total = 0, active = null;
@@ -440,12 +469,14 @@ function renderAction(a, d) {
         : "Nobody left has chips behind: a call runs it out."
       } No betting follows, so what calling and folding were worth can be worked out exactly — no solver needed.">call ends it</span>`
     : "";
-  const size = `${actionSize(a)}${a.is_all_in ? ' <span class="allin">ALL-IN</span>' : ""}${exact}`;
-  // The pot as it stood when this player had to act. Reading a hand means
-  // tracking what a bet is being laid against, and the street header's opening
-  // pot stops being that number the moment anyone puts money in.
-  const head = `<span class="potnow">${bb(a.pot_before_bb)}</span>
-      <span class="who">${a.position}</span>
+  // A villain's verdict names their hand -- it links to the square and says the
+  // class in its tooltip -- so it stays hidden until their cards are turned
+  // over. Otherwise the face-down cards are decoration and the row gives away
+  // the thing you are supposed to be judging without.
+  const villain = !a.is_hero && a.verdict
+    ? " " + verdictLink(a.verdict, `data-peeked="${a.seat}" hidden`) : "";
+  const size = `${actionSize(a)}${a.is_all_in ? ' <span class="allin">ALL-IN</span>' : ""}${exact}${villain}`;
+  const head = `<span class="who">${a.position}</span>
       ${actorCards(a)}
       <span class="what ${a.action}">${a.action}</span>
       <span class="size">${size}</span>`;
@@ -501,16 +532,17 @@ function renderGto(d) {
     ${rows}${mixed}</div>`;
 }
 
-function renderVerdict(d) {
-  if (!d.verdict) return "";
-  const v = d.verdict;
-  // The chart is a link, not a citation: a verdict you cannot check is worth
-  // less than no verdict.
-  // Inside a <summary>, a click would also toggle the row open.
-  return `<a class="verdict ${v.tone}" onclick="event.stopPropagation()"
+// The chart is a link, not a citation: a verdict you cannot check is worth
+// less than no verdict. Inside a <summary>, a click would also toggle the row.
+function verdictLink(v, extra = "") {
+  return `<a class="verdict ${v.tone}" onclick="return openChartModal(this, event)" ${extra}
     href="#chart:${v.chart}:${v.hand}"
     title="${v.hand} in ${v.chart.replace(/_/g," ")}">${v.label}
     <em>${(v.frequency * 100).toFixed(0)}%</em></a>`;
+}
+
+function renderVerdict(d) {
+  return d.verdict ? verdictLink(d.verdict) : "";
 }
 
 function renderOutcome(v) {
@@ -560,7 +592,7 @@ function renderOutcome(v) {
 
 function render(v) {
   if (v.error) { $("#detail").innerHTML = `<div class="empty">${v.error}</div>`; return; }
-  const h = v.hand, r = v.result;
+  const h = v.hand;
   const byIndex = new Map(v.hero_decisions.map(d => [d.action_index, d]));
   // Everything else on this page is derived; this is what the site actually
   // said. Behind a button because it is the thing you reach for when a number
@@ -578,15 +610,11 @@ function render(v) {
     ${h.source_text ? `<pre class="src" hidden>${esc(h.source_text)}</pre>` : ""}
     <h3>Action</h3>
     ${v.streets.map(s => `<div class="street"><header>
-        <span class="name">${s.street}</span>${board(s.board)}
-        <span class="pot">${s.pot_start_bb === null ? "run out" : "pot " + bb(s.pot_start_bb)}</span></header>
+        <span class="name">${s.street}</span>
+        <span class="pot">${s.pot_start_bb === null ? "run out" : "pot " + bb(s.pot_start_bb)}</span>
+        ${board(s.board)}</header>
       ${s.actions.map(a => renderAction(a, byIndex.get(a.action_index))).join("")}</div>`).join("")}
-    ${renderOutcome(v)}
-    <div class="result">You were out on <b>${r.hero_street_reached}</b>${r.hero_went_to_showdown ? ", at showdown" : ""} ·
-      net <span class="${netClass(r.hero_net_bb)}">${r.hero_net_bb > 0 ? "+" : ""}${r.hero_net_bb}bb</span>${
-        r.hero_street_reached !== r.street_reached
-          ? ` <span class="dimnote">(hand ran to ${r.street_reached}${r.showdown ? ", showdown" : ""} without you)</span>` : ""
-      }</div>`;
+    ${renderOutcome(v)}`;
   $("#detail").scrollTop = 0;
 }
 
@@ -650,11 +678,10 @@ async function loadCharts() {
   }
 }
 
-async function openChart(spot, el, highlight) {
-  if (active) active.classList.remove("active");
-  if (el) { active = el; el.classList.add("active"); }
-  history.replaceState(null, "", "#chart:" + spot + (highlight ? ":" + highlight : ""));
-  const c = await fetch(`/api/charts/${encodeURIComponent(spot)}`).then(r => r.json());
+// The 13x13 grid, built once and used by both the chart page and the modal --
+// two copies would drift, and the mixed-strategy banding is the part worth
+// keeping identical.
+function rangeGrid(c, highlight) {
   const seen = new Set();
   const cellHtml = (hand) => {
     const mix = c.grid[hand] || { fold: 1 };
@@ -672,6 +699,16 @@ async function openChart(spot, el, highlight) {
   const cellsHtml = RANKS13.flatMap((hi, i) =>
     RANKS13.map((lo, j) => cellHtml(i === j ? hi + lo : (j > i ? hi + lo + "s" : lo + hi + "o")))
   ).join("");
+  return `<div class="rangegrid">${cellsHtml}</div>
+    <div class="legend">${[...seen].map(a =>
+      `<span><b style="background:${ACTION_COLOUR[a] || "#888"}"></b>${a}</span>`).join("")}</div>`;
+}
+
+async function openChart(spot, el, highlight) {
+  if (active) active.classList.remove("active");
+  if (el) { active = el; el.classList.add("active"); }
+  history.replaceState(null, "", "#chart:" + spot + (highlight ? ":" + highlight : ""));
+  const c = await fetch(`/api/charts/${encodeURIComponent(spot)}`).then(r => r.json());
   const ref = spot.startsWith("9max_");
   const bare = spot.replace(/^9max_/, "");
   $("#detail").innerHTML = `
@@ -679,9 +716,7 @@ async function openChart(spot, el, highlight) {
       bare.replace(/_/g, " ")}</span>${
       ref ? ' <span class="verdict ok" style="margin-left:8px">9-handed only</span>' : ""}</h2>
     <h3>Range</h3>
-    <div class="rangegrid">${cellsHtml}</div>
-    <div class="legend">${[...seen].map(a =>
-      `<span><b style="background:${ACTION_COLOUR[a] || "#888"}"></b>${a}</span>`).join("")}</div>
+    ${rangeGrid(c, highlight)}
     <h3>Notes</h3>
     <textarea class="notes" id="notes">${c.notes.replace(/</g,"&lt;")}</textarea>
     <div class="saverow"><button class="btn" id="save">Save notes</button><span class="saved" id="savedmsg"></span></div>`;
@@ -785,6 +820,65 @@ $("#detail").addEventListener("click", (e) => {
     el.dataset.shown = shown ? "" : "1";
     el.innerHTML = shown ? BACK : cardEls(el.dataset.cards.split(","));
   }
+  // Anything that would name the hand travels with the cards.
+  for (const el of document.querySelectorAll(`[data-peeked="${seat}"]`)) {
+    el.hidden = shown;
+  }
+});
+
+// ---- chart modal ----
+// A verdict link is consulted in the middle of reading a hand, so following it
+// should not replace the hand. The href stays real -- middle-click, copy-link
+// and the Charts tab all still work -- and the click is intercepted.
+let lastFocus = null;
+
+async function showChart(spot, highlight) {
+  const c = await fetch(`/api/charts/${encodeURIComponent(spot)}`).then(r => r.json());
+  const bare = spot.replace(/^9max_/, "");
+  $("#sheettitle").innerHTML = `${bare.split("_")[0]}${
+    highlight ? ` &middot; ${highlight}` : ""}<small>${bare.replace(/_/g, " ")}${
+    spot.startsWith("9max_") ? " — 9-handed only" : ""}</small>`;
+  $("#sheetbody").innerHTML = rangeGrid(c, highlight)
+    + (c.notes ? `<div class="notesread">${esc(c.notes)}</div>` : "")
+    + `<a class="full" href="#chart:${spot}${highlight ? ":" + highlight : ""}">
+         Open the full chart to edit notes →</a>`;
+  lastFocus = document.activeElement;
+  $("#overlay").hidden = false;
+  $(".sheetclose").focus();
+}
+
+function closeChart() {
+  $("#overlay").hidden = true;
+  $("#sheetbody").innerHTML = "";
+  if (lastFocus) lastFocus.focus();
+}
+
+// Bound on the link itself rather than delegated. The anchor already needed an
+// inline handler to keep the click off the <details> summary it sits inside, and
+// one handler that certainly runs beats a document-level listener whose phase
+// has to be reasoned about against the summary's own stopPropagation.
+function openChartModal(link, event) {
+  event.preventDefault();
+  event.stopPropagation();
+  const [, spot, hand] = link.getAttribute("href").split(":");
+  showChart(spot, hand);
+  return false;
+}
+
+document.addEventListener("click", (e) => {
+  // The backdrop, but not the sheet itself.
+  if (e.target.id === "overlay" || e.target.closest(".sheetclose")) closeChart();
+});
+
+// Esc is the whole point of the modal: out without touching history.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#overlay").hidden) closeChart();
+});
+
+// The "open the full chart" link inside the sheet does navigate, so get out of
+// the way first or the modal hangs over the page it just opened.
+$("#overlay").addEventListener("click", (e) => {
+  if (e.target.closest("a.full")) closeChart();
 });
 
 window.addEventListener("hashchange", route);

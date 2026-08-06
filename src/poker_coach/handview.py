@@ -101,6 +101,7 @@ def build(
 
     streets, hero_decisions, hero_last_street = _walk(hh, bb, hero, players)
     _attach_gto(hero_decisions, provider, hh, hero)
+    _attach_villain_verdicts(streets, provider, hero)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -361,6 +362,17 @@ def _walk(
             "cards": known_cards.get(seat),
             # Why this node is worth pricing exactly -- see `_terminal`.
             "terminal": _terminal(st, seat, street, folded, players),
+            # Built for every actor. The key never mentioned whose decision it
+            # was -- it is the abstract spot -- so a villain's looks a chart up
+            # exactly the way hero's does.
+            "spot_key": _spot_key(
+                street,
+                {"position": _position(seat, players)},
+                last_aggressor,
+                stack_before,
+                pot_before,
+                bb,
+            ),
             "action": kind.value,
             "amount_cents": amount,
             "amount_bb": _bb(amount, bb),
@@ -536,7 +548,7 @@ def _decision(
         # SolutionProvider is queried with, and it must depend only on the
         # abstract situation -- position, action sequence, stack depth, board --
         # never on this specific hand, or every lookup is a cache miss.
-        "spot_key": _spot_key(street, entry, last_aggressor, stack_before, pot_before, bb),
+        "spot_key": entry["spot_key"],
         # Reference facts: what equilibrium does at this node. Deterministic and
         # cacheable, so it belongs with the facts rather than with the judgments
         # -- it is a lookup, not an opinion. Populated by a SolutionProvider;
@@ -658,6 +670,42 @@ def _attach_gto(
         if solution is not None:
             d["gto"] = solution.as_fact()
             d["verdict"] = _verdict(d["hero_action"], solution)
+
+
+def _attach_villain_verdicts(
+    streets: list[dict], provider: SolutionProvider | None, hero: int
+) -> None:
+    """Chart the preflop actions of villains whose cards we ended up seeing.
+
+    An observation about one hand, deliberately not a statistic about anybody.
+    You only learn a villain's cards when they show, and showing is conditional
+    on reaching a showdown -- so the sample is not a sample of how they play. In
+    this archive, 70% of all villain preflop actions are folds and **none** of
+    those hands are ever visible, while raises are 20% of what happens and 73%
+    of what can be seen. Averaged, that says the pool is looser than it is; and
+    a detector built on it could only ever report loose, never tight, because
+    the evidence for tight is structurally invisible. So this labels the action
+    in front of you and nothing aggregates it.
+
+    Preflop only. The charts are preflop, and a postflop lookup would miss on
+    every spot anyway -- doing it would just be lookups that always fail.
+    """
+    if provider is None:
+        return
+    for street in streets:
+        if street["street"] != Street.PREFLOP.value:
+            continue
+        for a in street["actions"]:
+            if a["is_hero"] or not a["cards"]:
+                continue
+            try:
+                solution = provider.lookup(a["spot_key"], "".join(a["cards"]))
+            except Exception:
+                # Same contract as hero's: a broken provider costs a label, not
+                # the hand.
+                solution = None
+            if solution is not None:
+                a["verdict"] = _verdict(a["action"], solution)
 
 
 # How often the chart has to take an action before we call it standard. Below

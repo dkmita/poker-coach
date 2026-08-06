@@ -44,6 +44,28 @@ _ENTRY = re.compile(r"^(?P<hand>[2-9TJQKA]{2}[so]?)(?P<plus>\+?)(?::(?P<weight>[
 # distinguishes them and conflating them would silently mislabel a decision.
 KNOWN_ACTIONS = ("fold", "check", "call", "bet", "raise")
 
+# Positions that may appear hyphenated in a chart name. Guarded against a list
+# so an ordinary hyphen elsewhere in a key is never mistaken for a group.
+_POSITIONS = frozenset(
+    ("UTG", "UTG+1", "UTG+2", "HJ", "CO", "BTN", "SB", "BB")
+)
+
+
+def _expand_groups(key: str) -> list[str]:
+    """Every single-position key a grouped chart name also answers for.
+
+    `BTN_preflop_vs_BB-SB_3bet_100bb` covers both `..._vs_BB_3bet_...` and
+    `..._vs_SB_3bet_...`. Keys with no grouped token expand to themselves.
+    """
+    keys = [""]
+    for part in key.split("_"):
+        options = [part]
+        members = part.split("-")
+        if len(members) > 1 and all(m in _POSITIONS for m in members):
+            options = members
+        keys = [f"{k}_{o}" if k else o for k in keys for o in options]
+    return keys
+
 
 def canonical_class(hand: str) -> str:
     """Two dealt cards to their strategy class: 'AdJs' -> 'AJo', 'KdQd' -> 'KQs'.
@@ -119,6 +141,7 @@ class ChartProvider:
         self.root = Path(root)
         self.source = source or str(self.root)
         self._spots: dict[str, dict[str, dict[str, float]]] = {}
+        self._aliases: dict[str, str] = {}
         self._load()
 
     def _load(self) -> None:
@@ -143,10 +166,36 @@ class ChartProvider:
                 actions[action] = parse_range(file.read_text())
             if actions:
                 self._spots[spot_dir.name] = actions
+        self._build_aliases()
 
     @property
     def spot_keys(self) -> tuple[str, ...]:
         return tuple(sorted(self._spots))
+
+    def _build_aliases(self) -> None:
+        """Expand charts published for several positions at once.
+
+        The pack merges positions whose strategy is close enough to share a
+        page: `BTN_preflop_vs_BB-SB_3bet` is the button's answer to a 3-bet from
+        *either* blind. Nothing generates that name on the lookup side -- a spot
+        key names the one seat that actually acted -- so without this the chart
+        exists and never resolves. It is how a button call of a big-blind 3-bet
+        came back with no verdict at all despite the chart sitting on disk.
+
+        Expanded here rather than by writing duplicate directories, so the
+        import stays a faithful copy of what the pack publishes.
+        """
+        self._aliases: dict[str, str] = {}
+        for key in self._spots:
+            for alias in _expand_groups(key):
+                if alias != key:
+                    self._aliases.setdefault(alias, key)
+
+    def _actual(self, key: str) -> str | None:
+        """The chart directory answering for `key`, following group aliases."""
+        if key in self._spots:
+            return key
+        return self._aliases.get(key)
 
     def notes(self, spot_key: str) -> str:
         """Free-text notes for a spot. Editable; not part of the strategy."""
@@ -201,13 +250,13 @@ class ChartProvider:
         was 2.2bb or 2.5bb. Far-off sizings are a real approximation, which the
         chart's notes say out loud.
         """
-        if spot_key in self._spots:
-            return spot_key
+        if actual := self._actual(spot_key):
+            return actual
         m = self._SIZE.match(spot_key)
         if m:
             generic = m["head"] + m["depth"]
-            if generic in self._spots:
-                return generic
+            if actual := self._actual(generic):
+                return actual
             spot_key = generic
 
         # Fall back on stack depth. Charts are published at a depth, not per
@@ -219,11 +268,11 @@ class ChartProvider:
             return None
         want, head = int(m["depth"]), m["head"]
         candidates = []
-        for key in self._spots:
+        for key in (*self._spots, *self._aliases):
             k = self._DEPTH.match(key)
             if k and k["head"] == head:
                 candidates.append((abs(int(k["depth"]) - want), int(k["depth"]), key))
-        return min(candidates)[2] if candidates else None
+        return self._actual(min(candidates)[2]) if candidates else None
 
     def lookup(self, spot_key: str, hand: str) -> Solution | None:
         resolved = self.resolve(spot_key)

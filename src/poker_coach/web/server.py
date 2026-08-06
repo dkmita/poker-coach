@@ -176,6 +176,13 @@ def make_handler(archive: Archive):
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            # Everything here is generated per request and every one of it can
+            # change under the browser: app.html is re-read from disk on each
+            # load, and the hand JSON changes whenever the archive is
+            # re-ingested. With no validator and no max-age the browser is
+            # entitled to cache heuristically, and it does -- which shows up as
+            # a UI edit that "did not take" until a hard reload.
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 

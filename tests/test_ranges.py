@@ -120,3 +120,35 @@ def test_grid_fills_the_fold_remainder(charts):
     g = charts.grid("BB_preflop_vs_UTG_raise_2.5bb_100bb")
     assert g["72o"] == {"fold": 1.0}
     assert abs(sum(g["AJo"].values()) - 1.0) < 1e-9
+
+
+def test_a_grouped_chart_answers_for_each_position(tmp_path):
+    """The pack merges positions whose strategy is close enough to share a page.
+
+    Nothing generates `vs_BB-SB` on the lookup side -- a spot key names the one
+    seat that acted -- so without expanding the group the chart sits on disk and
+    never resolves. A button call of a big-blind 3-bet came back with no verdict
+    at all for exactly this reason.
+    """
+    d = tmp_path / "BTN_preflop_vs_BB-SB_3bet_100bb"
+    d.mkdir(parents=True)
+    (d / "call.txt").write_text("QTs, AA")
+    p = ChartProvider(tmp_path)
+
+    assert p.resolve("BTN_preflop_vs_BB_3bet_100bb") == d.name
+    assert p.resolve("BTN_preflop_vs_SB_3bet_100bb") == d.name
+    # And through the size-agnostic path, which is how a real key arrives.
+    assert p.resolve("BTN_preflop_vs_BB_3bet_10.0bb_100bb") == d.name
+    solution = p.lookup("BTN_preflop_vs_BB_3bet_10.0bb_100bb", "QsTs")
+    assert solution is not None
+    # The chart it reports is the real directory, so the UI links somewhere.
+    assert solution.spot_key == d.name
+
+
+def test_a_hyphen_that_is_not_a_group_of_positions_is_left_alone(tmp_path):
+    """Only hyphenated *positions* are a group. Anything else is just a name."""
+    d = tmp_path / "BTN_preflop_vs_X-Y_3bet_100bb"
+    d.mkdir(parents=True)
+    (d / "call.txt").write_text("AA")
+    p = ChartProvider(tmp_path)
+    assert p.resolve("BTN_preflop_vs_X_3bet_100bb") is None
