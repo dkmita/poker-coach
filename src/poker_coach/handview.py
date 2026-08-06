@@ -162,13 +162,13 @@ def _showdown(hh: HandHistory, bb: Cents, hero: int, players: int) -> dict:
     one would be inventing information.
     """
     board = ""
-    revealed: dict[int, str] = {}
+    showed: set[int] = set()
     for raw in hh.actions:
         if raw.startswith("d db "):
             board += raw.split(None, 2)[2].split("#")[0].strip()
-        m = re.match(r"^p(\d+) sm\s+(\S+)", raw.strip())
+        m = re.match(r"^p(\d+) sm\s", raw.strip())
         if m:
-            revealed[int(m.group(1)) - 1] = m.group(2)
+            showed.add(int(m.group(1)) - 1)
 
     finishing = hh.finishing_stacks or []
     nets = [
@@ -179,18 +179,19 @@ def _showdown(hh: HandHistory, bb: Cents, hero: int, players: int) -> dict:
 
     return {
         "board": [board[i : i + 2] for i in range(0, len(board), 2)],
-        "went_to_showdown": bool(revealed),
+        "went_to_showdown": bool(showed),
         "players": [
             {
                 "seat": i,
                 "position": _position(i, players),
                 "name": (hh.players[i] if hh.players else f"p{i + 1}"),
                 "is_hero": i == hero,
-                # None means "never shown", not "no cards".
-                "cards": (
-                    [revealed[i][j : j + 2] for j in range(0, len(revealed[i]), 2)]
-                    if i in revealed else None
-                ),
+                # From the deal, not from the showdown: hero's cards are always
+                # known even when the hand ends with everyone folding, and a
+                # villain who showed has their cards recorded there too. None
+                # still means genuinely unknown.
+                "cards": _hole_from_actions(hh, i),
+                "showed": i in showed,
                 "net_cents": nets[i],
                 "net_bb": _bb(nets[i], bb),
                 "won": nets[i] > 0 and nets[i] == best,

@@ -212,10 +212,14 @@ def test_board_comes_from_the_deal_actions(tmp_path):
 
 
 def test_showdown_reports_cards_and_result(view):
+    """Hero's cards come from the deal, so they are known even when the hand
+    ends with a fold and nobody shows."""
     sd = view["showdown"]
     assert sd["board"] == ["7h", "2c", "3d", "Ts", "4c"]
+    assert sd["went_to_showdown"] is False  # villain folded the river
     hero = next(p for p in sd["players"] if p["is_hero"])
     assert hero["cards"] == ["Kd", "9d"]
+    assert hero["showed"] is False
     assert hero["net_cents"] == 530 and hero["won"] is True
 
 

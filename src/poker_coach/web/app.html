@@ -66,6 +66,11 @@
     text-transform: uppercase; letter-spacing: .1em; background: var(--bg);
     border-bottom: 1px solid var(--line); position: sticky; top: 0;
   }
+  #reftoggle {
+    margin: 14px 16px 24px; padding: 9px 12px; text-align: center; cursor: pointer;
+    border: 1px dashed var(--line); border-radius: 6px; color: var(--dim); font-size: 12px;
+  }
+  #reftoggle:hover { color: var(--text); border-color: var(--dim); }
   #more { padding: 12px 16px; color: var(--dim); cursor: pointer; text-align: center; font-size: 12px; }
   #more:hover { color: var(--text); }
 
@@ -160,6 +165,8 @@
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 let offset = 0, total = 0, active = null;
+// 9-handed-only charts are reference material for a game you don't play.
+let showRef = false;
 
 const faces = (cs) => `<span class="cards">${cs.map(c =>
   `<span class="card ${c[1]}">${c[0]}${c[1]}</span>`).join("")}</span>`;
@@ -329,7 +336,12 @@ async function loadCharts() {
   const rank = (k) => k.startsWith("9-handed")
     ? 100 + ORDER.indexOf(k.split("· ")[1])
     : ORDER.indexOf(k);
+  // The 9-handed-only charts are two thirds of the pack and no 6-max hand can
+  // ever match one, so they are collapsed by default rather than burying the
+  // 34 that are actually usable.
+  const refCount = r.spots.filter(x => x.startsWith("9max_")).length;
   for (const key of [...groups.keys()].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))) {
+    if (key.startsWith("9-handed") && !showRef) continue;
     const head = document.createElement("div");
     head.className = "group";
     head.textContent = key;
@@ -344,6 +356,15 @@ async function loadCharts() {
       el.onclick = () => openChart(spot, el);
       $("#rows").appendChild(el);
     }
+  }
+  if (refCount) {
+    const t = document.createElement("div");
+    t.id = "reftoggle";
+    t.textContent = showRef
+      ? `Hide 9-handed-only charts`
+      : `Show ${refCount} 9-handed-only charts`;
+    t.onclick = () => { showRef = !showRef; loadCharts(); };
+    $("#rows").appendChild(t);
   }
 }
 
