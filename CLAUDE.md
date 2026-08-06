@@ -4,12 +4,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Early. What exists: `models.py` (shared types) and `corpus/schema.sql` (verified against SQLite
-3.51 — 9 tables, 3 views). Everything else below is the agreed design, not shipped code. Update
-this file as code lands so it describes reality rather than intent.
+Early. What exists and works:
 
-No parser, no pipeline stages, no `pyproject.toml` yet. `pokerkit` is a planned dependency
-(requires Python ≥ 3.11) and is not installed.
+- `models.py` — shared types
+- `corpus/schema.sql` — verified on SQLite 3.51 (7 tables, 2 views)
+- `replay.py` — the pokerkit boundary, covered by 15 passing tests
+- `pyproject.toml` — `pokerkit>=0.7,<0.8`, Python ≥ 3.11
+
+Not written yet: the ACR/WPN parser, the three pipeline stages, the range charts, and the CLI.
+Everything below describing those is agreed design, not shipped code — update this file as they
+land so it describes reality rather than intent.
+
+## Commands
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'        # see the index caveat below
+.venv/bin/python -m pytest -q            # whole suite
+.venv/bin/python -m pytest tests/test_replay.py::test_cc_resolves_to_check_or_call   # one test
+```
+
+Two environment gotchas on this machine, both already hit:
+
+- **pip defaults to Indeed's internal artifact proxy** (`dl.artifacts.indeed.tech`), which does not
+  serve `pytest` or `hatchling`. Append `--index-url https://pypi.org/simple` for this project's
+  dev dependencies — it's a personal repo, not Indeed work.
+- **Build isolation can't reach the network**, so `pip install -e .` fails while resolving
+  `hatchling`. Either preinstall `hatchling` and add `--no-build-isolation`, or skip the editable
+  install entirely: `[tool.pytest.ini_options] pythonpath = ["src"]` means pytest imports the
+  package straight from `src/` without it.
 
 ## What this is
 
@@ -79,6 +102,29 @@ annoyance, not a constraint.
 - **Watch `v_detector_precision`.** It is the main defense against the funnel silently degrading. A
   detector whose flags rarely come back `mistake` is burning agent budget.
 
+### pokerkit: three undocumented behaviors `replay.py` depends on
+
+All three were found empirically against 0.7.4, all three fail by returning
+plausible-but-wrong numbers rather than raising, and all three are why the dependency is pinned
+`>=0.7,<0.8` and confined to one module. **Nothing outside `replay.py` may import pokerkit.**
+
+1. **One `State` object, mutated in place.** Every `state_actions` pair yields the same instance,
+   so `[s for s, _ in hh.state_actions]` is N references to the *final* state. Read what you need
+   during the pass.
+2. **`state_actions` is off by one.** Pair `i` is `(state_i, action[i-1])`, where `state_i` is what
+   `hh.actions[i]` faced. Index into `hh.actions` yourself; ignore the action in the tuple.
+3. **`street_index` is positional, not board-derived.** At the first state of each street the card
+   hasn't been dealt, so board length lags.
+
+`iter_decisions` asserts `state.actor_index` matches the seat named in the action, which is what
+turns a future regression into a `ReplayError` instead of silently wrong pot sizes. Two things
+pokerkit gives us for free and we should not rebuild: it **validates** betting legality (an illegal
+sequence raises, so a hand that replays is internally consistent), and `pokerkit.notation.rake`
+implements percentage/cap/no-flop-no-drop.
+
+pokerkit also ships site parsers (`HandHistory.from_pokerstars`, `from_partypoker`, …). There is no
+WPN/ACR one, but `PokerStarsParser` is a useful reference when writing it.
+
 ### PHH gaps to work around
 
 The spec does not cover everything a cash-game study tool needs. These are known, not surprises:
@@ -108,7 +154,7 @@ src/poker_coach/
 ├── corpus/
 │   ├── schema.sql       # DONE
 │   └── store.py         # SQLite access
-├── replay.py            # pokerkit wrapper: .phh -> Decision stream
+├── replay.py            # DONE: pokerkit boundary, .phh -> Decision stream
 ├── triage/
 │   ├── ranges.py        # solver-derived charts as data, not code
 │   ├── equity.py        # equity/EV primitives

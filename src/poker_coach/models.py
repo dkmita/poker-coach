@@ -45,6 +45,10 @@ SUITS = "cdhs"
 PHH_SITE = "_pc_site"
 PHH_SITE_HAND_ID = "_pc_site_hand_id"
 PHH_SOURCE_FILE = "_pc_source_file"
+# PHH is player-neutral by design -- it archives a hand, not one player's view of
+# it -- so "hero" is our concept and has to be carried as an extension. 0-based,
+# matching PHH's player ordering (`p1` is index 0).
+PHH_HERO_INDEX = "_pc_hero_index"
 
 
 class Street(Enum):

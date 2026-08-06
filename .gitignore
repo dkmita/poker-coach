@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Local corpus. The .phh archive is the system of record but it is personal
+# match data, and the SQLite index is fully rebuildable from it.
+archive/
+*.db
+*.db-wal
+*.db-shm
+
+# Real hand histories from the site. These contain other players' screen names
+# and this repo is public. Anonymized fixtures live in tests/ and are committed;
+# raw captures stay here and are not.
+samples/
