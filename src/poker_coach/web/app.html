@@ -103,6 +103,16 @@
   .row .flag.note {
     color: var(--dim); background: var(--panel-2); border-color: var(--line);
   }
+  /* A priceable node is neither good nor bad news -- it says the cost of this
+     decision is knowable, not that it was a mistake. Green would read as praise. */
+  .row .flag.exact, .act .exact {
+    color: var(--hero); background: rgba(110,168,254,.10);
+    border-color: rgba(110,168,254,.35);
+  }
+  .act .exact {
+    display: inline-block; padding: 1px 7px; border-radius: 999px; border: 1px solid;
+    font-size: 10px; font-weight: 650; white-space: nowrap; margin-left: 8px;
+  }
   .pos-net { color: var(--good); } .neg-net { color: var(--bad); } .zero-net { color: var(--dim); }
   .group {
     padding: 12px 16px 6px; font-size: 10px; font-weight: 700; color: var(--dim);
@@ -268,7 +278,7 @@
 <body>
   <div id="list">
     <div id="tabs"><button class="tab on" data-tab="hands">Hands</button><button class="tab" data-tab="charts">Charts</button></div>
-    <div id="filters"><button class="filt on" data-f="all">All</button><button class="filt bad" data-f="flagged">Preflop</button><button class="filt warn" data-f="interesting">Interesting</button></div>
+    <div id="filters"><button class="filt on" data-f="all">All</button><button class="filt bad" data-f="flagged">Preflop</button><button class="filt warn" data-f="interesting">Interesting</button><button class="filt" data-f="terminal">Terminal</button></div>
     <div id="rows"></div><div id="more">load more</div>
   </div>
   <div id="detail"><div class="empty">Select a hand</div></div>
@@ -331,7 +341,7 @@ async function loadList() {
   $("#filters").style.display = "flex";
   const r = await fetch(`/api/hands?offset=${offset}&limit=60&filter=${filterKind}`)
     .then(r => r.json());
-  const LABEL = { flagged: "Preflop", interesting: "Interesting" };
+  const LABEL = { flagged: "Preflop", interesting: "Interesting", terminal: "Terminal" };
   for (const [k, n] of Object.entries(r.counts || {})) {
     const b = $(`.filt[data-f="${k}"]`);
     if (b) b.textContent = `${LABEL[k]} (${n})`;
@@ -367,7 +377,11 @@ async function loadList() {
           <div class="meta"><b class="pos">${row.position}</b> · ${
             row.hero_street_reached}</div></div>
         <div class="flags">
-          ${off.length ? `<div class="flag" title="${off.join(" · ")}">${
+          ${(row.terminal || []).length ? `<div class="flag exact" title="${
+            row.terminal_hero ? "Your decision" : "A villain's decision"
+            } (${row.terminal.join(", ")}) where calling ends the hand, so its cost is computable without a solver"
+            >${row.terminal_hero ? "" : "villain "}call ends it</div>` : ""}${
+            off.length ? `<div class="flag" title="${off.join(" · ")}">${
             off.length > 1 ? `${off.length} preflop` : "preflop"}</div>` : ""}${
             (row.interest || []).length ? `<div class="flag note" title="${
               row.interest.join(" · ")}">${row.interest[0]}</div>` : ""}</div>
@@ -416,7 +430,15 @@ function actorCards(a) {
 }
 
 function renderAction(a, d) {
-  const size = `${actionSize(a)}${a.is_all_in ? ' <span class="allin">ALL-IN</span>' : ""}`;
+  // Marked on the row rather than only in a summary: the point of the label is
+  // to say which decision in the hand is the one with a knowable price.
+  const exact = a.terminal
+    ? ` <span class="exact" title="${a.terminal === "river"
+        ? "Last street, heads up: a call goes straight to showdown."
+        : "Nobody left has chips behind: a call runs it out."
+      } No betting follows, so what calling and folding were worth can be worked out exactly — no solver needed.">call ends it</span>`
+    : "";
+  const size = `${actionSize(a)}${a.is_all_in ? ' <span class="allin">ALL-IN</span>' : ""}${exact}`;
   // The pot as it stood when this player had to act. Reading a hand means
   // tracking what a bet is being laid against, and the street header's opening
   // pot stops being that number the moment anyone puts money in.

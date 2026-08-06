@@ -40,6 +40,11 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 # Spot keys carry '+' (UTG+1) but must never carry a path separator.
 _SAFE_SPOT = re.compile(r"^[A-Za-z0-9._+-]+$")
 
+# The review filters, in one place. An unknown name falls back to "all", so a
+# filter missing from here does not fail -- it silently returns the whole
+# archive, which is how `terminal` shipped looking like it matched every hand.
+FILTERS = ("all", "flagged", "interesting", "terminal")
+
 
 class Archive:
     """The .phh files on disk, plus a memo of the views built from them."""
@@ -89,6 +94,10 @@ class Archive:
             return bool(self._off_chart(view))
         if kind == "interesting":
             return bool(view["interest"]["interesting"])
+        if kind == "terminal":
+            # Any player's, not only hero's -- a villain calling off is where
+            # you learn what the pool actually stacks off with.
+            return bool(view.get("terminal"))
         return True
 
     @staticmethod
@@ -135,6 +144,13 @@ class Archive:
                     "street_reached": r["street_reached"],
                     "hero_net_bb": r["hero_net_bb"],
                     "preflop_off_chart": off,
+                    # Reasons only; the detail pane carries the nodes themselves.
+                    "terminal": sorted({
+                        n["reason"] for n in view.get("terminal", [])
+                    }),
+                    "terminal_hero": any(
+                        n["is_hero"] for n in view.get("terminal", [])
+                    ),
                     "interest": view["interest"]["reasons"],
                 }
             )
@@ -196,7 +212,7 @@ def make_handler(archive: Archive):
                 offset = int(query.get("offset", ["0"])[0])
                 limit = min(int(query.get("limit", ["60"])[0]), 200)
                 kind = query.get("filter", ["all"])[0]
-                if kind not in ("all", "flagged", "interesting"):
+                if kind not in FILTERS:
                     kind = "all"
                 self._json(archive.summaries(offset, limit, kind=kind))
                 return

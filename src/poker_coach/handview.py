@@ -152,6 +152,25 @@ def build(
             "rake_cents": index.rake,
         },
         "showdown": _showdown(hh, bb, hero, players),
+        # Nodes whose cost is exactly computable without a solver. Every player's,
+        # not just hero's -- see `_terminal`.
+        "terminal": [
+            {
+                "action_index": a["action_index"],
+                "street": s["street"],
+                "position": a["position"],
+                "is_hero": a["is_hero"],
+                "action": a["action"],
+                "reason": a["terminal"],
+                # Pricing it needs a range for the bettor and cards for the
+                # caller. Hero's are always known; a villain's only if they
+                # showed, which is why this says whether it can be done at all.
+                "cards_known": a["cards"] is not None,
+            }
+            for s in streets
+            for a in s["actions"]
+            if a["terminal"]
+        ],
         "interest": _interest(streets, hero_decisions, index, bb),
         # Filled by the analyze stage. Present and null so a client can rely on
         # the key existing rather than probing for it.
@@ -309,6 +328,7 @@ def _walk(
     last_aggressor: dict[str, Any] | None = None
     current_street: Street | None = None
     raises_this_street = 0
+    folded: set[int] = set()
 
     # Pairing each action with the state it faced is `replay`'s job, not this
     # module's. An earlier copy of that logic lived here, indexing `hh.actions`
@@ -337,6 +357,8 @@ def _walk(
             "position": _position(seat, players),
             "is_hero": seat == hero,
             "cards": known_cards.get(seat),
+            # Why this node is worth pricing exactly -- see `_terminal`.
+            "terminal": _terminal(st, seat, street, folded, players),
             "action": kind.value,
             "amount_cents": amount,
             "amount_bb": _bb(amount, bb),
@@ -370,10 +392,16 @@ def _walk(
         )
         bucket["actions"].append(entry)
 
+        # After the entry is built, not before: `_terminal` asks who was still
+        # live when this player had to act, and that includes them.
+        if kind is ActionType.FOLD:
+            folded.add(seat)
+
         if seat == hero:
             hero_last_street = street
             hero_decisions.append(
-                _decision(entry, street, bb, to_call, pot_before, stack_before, board, last_aggressor)
+                _decision(entry, street, bb, to_call, pot_before, stack_before, board,
+                          last_aggressor)
             )
 
         if kind.is_aggressive:
@@ -410,6 +438,60 @@ def _walk(
     return ordered, hero_decisions, hero_last_street
 
 
+def _terminal(st, seat: int, street: Street, folded: set[int], players: int) -> str | None:
+    """Why calling here would end the hand, or None if it would not.
+
+    A **terminal** node is one where calling ends all betting, so calling and
+    folding are the only continuations and both have a closed-form value:
+
+        EV(call) = equity × (pot + call) − (1 − equity) × call
+        EV(fold) = 0
+
+    Everywhere else the value of a call depends on how the remaining streets get
+    played by both players, which is the thing solvers exist to compute and the
+    thing no amount of pot-odds arithmetic substitutes for. So this is the set of
+    decisions whose cost is knowable exactly, from a range estimate alone, with
+    no solver and no model.
+
+    It is marked for **every** player, not just hero. Villain's terminal calls
+    are how you learn what the pool is actually calling off with, and hero is not
+    the only person at the table making a priceable mistake.
+
+    Three shapes qualify, all requiring a bet to face -- unopened is a check, and
+    a check is free:
+
+    * ``all-in`` -- nobody who is still in the hand has chips behind, so no
+      further betting is possible whatever anyone does.
+    * ``all-in`` -- heads up, and calling costs this player everything they have.
+    * ``river`` -- heads up on the last street, where a call goes straight to
+      showdown.
+
+    Deliberately conservative about multiway. Three-handed on the river a call
+    does not close the action, because the player behind can still raise; and a
+    call for stack against two live opponents leaves them betting a side pot.
+    Both are still *analysable*, but not with the two-branch formula above, and
+    quietly including them would put estimates in a bucket labelled exact.
+
+    Note what this does *not* claim: that the action taken was terminal, or that
+    the best action was. A river bet can be raised, and pricing that raise needs
+    the same solver everything else does. The guarantee is only that call and
+    fold are exactly priceable at this node.
+    """
+    if st.to_call <= 0:
+        return None
+    live = [i for i in range(players) if i != seat and i not in folded]
+    if not live:
+        return None
+    if all(st.stacks[i] == 0 for i in live):
+        return "all-in"
+    if len(live) == 1:
+        if st.stacks[seat] <= st.to_call:
+            return "all-in"
+        if street is Street.RIVER:
+            return "river"
+    return None
+
+
 def _decision(
     entry: dict,
     street: Street,
@@ -424,6 +506,8 @@ def _decision(
     return {
         "action_index": entry["action_index"],
         "street": street.value,
+        # Whether call and fold are exactly priceable here; see `_terminal`.
+        "terminal": entry["terminal"],
         "board": [board[i : i + 2] for i in range(0, len(board), 2)],
         "hero_action": entry["action"],
         "amount_bb": entry["amount_bb"],

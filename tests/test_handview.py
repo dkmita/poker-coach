@@ -236,6 +236,57 @@ def test_actions_carry_the_actors_cards_when_known(view):
     assert any(a["cards"] is None for a in acts if not a["is_hero"])
 
 
+def test_terminal_nodes_are_marked_for_every_player(view):
+    """Marked on the node, not on hero -- a villain calling off is priceable too,
+    and it is where you learn what the pool stacks off with."""
+    nodes = view["terminal"]
+    assert len(nodes) == 1
+    n = nodes[0]
+    assert (n["street"], n["reason"], n["action"]) == ("river", "river", "fold")
+    assert n["is_hero"] is False
+    # This fixture deals p6 face-up, so the node is priceable. Whether the cards
+    # are known is reported separately from whether the node is terminal: in a
+    # real hand a villain's are known only if they showed, and an unpriceable
+    # terminal node is still a terminal node.
+    assert n["cards_known"] is True
+
+
+def test_a_bet_is_not_terminal_only_the_decision_facing_it_is(view):
+    """Terminality is about the *call* ending the hand. The bet that opens the
+    action can still be raised, so pricing it needs the whole tree."""
+    river = next(s for s in view["streets"] if s["street"] == "river")
+    bet, fold = river["actions"]
+    assert bet["action"] == "bet" and bet["terminal"] is None
+    assert fold["action"] == "fold" and fold["terminal"] == "river"
+
+
+def test_an_ordinary_flop_call_is_not_terminal(view):
+    """Money still behind and two streets to come: what the call is worth
+    depends on how they get played."""
+    flop = next(s for s in view["streets"] if s["street"] == "flop")
+    assert [a["terminal"] for a in flop["actions"]] == [None, None, None]
+
+
+def test_facing_an_all_in_is_terminal_on_any_street(tmp_path):
+    from tests.test_replay import HU_HAND
+
+    path = tmp_path / "hu.phh"
+    path.write_text(HU_HAND)
+    nodes = handview.build(load(path))["terminal"]
+    turn = [n for n in nodes if n["street"] == "turn"]
+    assert turn == [
+        {
+            "action_index": 12,
+            "street": "turn",
+            "position": "BTN",
+            "is_hero": True,
+            "action": "call",
+            "reason": "all-in",
+            "cards_known": True,
+        }
+    ]
+
+
 def test_a_chopped_pot_has_two_winners_who_both_finished_down(tmp_path):
     """Winning the pot and finishing ahead are different questions.
 
