@@ -122,16 +122,10 @@
   .priced .pos-net b { color: var(--good); }
   .priced .neg-net b { color: var(--bad); }
   .priced .hindsight { display: contents; }
-  /* A fact that can show its arithmetic. The marker is the only hint it opens,
-     so it stays visible rather than being hidden like the row chevrons. */
-  .fact.working { cursor: pointer; }
-  .fact.working > summary { display: flex; gap: 8px; align-items: baseline; list-style: none; }
-  .fact.working > summary::after { content: "?"; color: var(--dim); font-size: 10px; }
-  .fact.working > summary::-webkit-details-marker { display: none; }
-  .fact.working > .work {
-    margin-top: 6px; color: var(--dim); font-size: 11px; line-height: 1.5;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
+  /* A fact whose arithmetic is one hover away. The dotted underline is the only
+     thing saying so, so it stays even though the tooltip itself is the browser's. */
+  .fact.hint { cursor: help; }
+  .fact.hint b { text-decoration: underline dotted var(--line); text-underline-offset: 3px; }
   .priced .work {
     flex-basis: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 10.5px; opacity: .75;
@@ -372,7 +366,9 @@ const money = (cents) => `$${(cents / 100).toFixed(2)}`;
 const netClass = (n) => n > 0 ? "pos-net" : n < 0 ? "neg-net" : "zero-net";
 // The source text is the site's, not ours, and it contains other players'
 // screen names -- the one string on the page that must not be trusted as HTML.
-const esc = (s) => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const esc = (s) => s.replace(/[&<>"']/g, c => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[c]));
 
 // Local time, not the site's UTC. What matters is when you were at the table,
 // and one evening's session straddles two UTC dates.
@@ -567,8 +563,7 @@ function decisionFacts(d) {
       d.facing.all_in ? " all-in" : ""}`]);
   }
   return f.map(([k, v, work]) => work
-    ? `<details class="fact working"><summary><b>${k}</b><span>${v}</span></summary>
-         <div class="work">${esc(work)}</div></details>`
+    ? `<div class="fact hint" title="${esc(work)}"><b>${k}</b><span>${v}</span></div>`
     : `<div class="fact"><b>${k}</b><span>${v}</span></div>`).join("");
 }
 
