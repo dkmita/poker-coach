@@ -203,28 +203,43 @@ plausible-but-wrong numbers rather than raising, and all three are why the depen
 1. **One `State` object, mutated in place.** Every `state_actions` pair yields the same instance,
    so `[s for s, _ in hh.state_actions]` is N references to the *final* state. Read what you need
    during the pass.
-2. **`state_actions` does not line up with `hh.actions` at all.** Pair `i` is
-   `(state_after_action_i, action_i)`, so the state facing an action is the previous pair's. That
-   reads like a plain off-by-one and *works until the flop* — but pokerkit also emits states for its
-   own automatic operations, whose action half is `None`. Heads-up it inserts one at every postflop
-   street transition: 16 actions come back as **21 pairs**, and the drift grows by one per street.
-   Six-handed the extras land only after the last action, which is why a six-handed fixture will
-   pass under a pairing that is wrong for every postflop action in a heads-up hand.
-   **Use `iter_action_states`**, which pairs from the walk itself and never indexes `hh.actions`.
+2. **`state_actions` does not line up with `hh.actions` positionally.** Pair `i` is
+   `(state_after_action_i, action_i)`, so the state facing an action is the previous pair's — and
+   pokerkit also emits states for its own automatic operations, whose action half is `None`, which
+   makes the two sequences different lengths. **Use `iter_action_states`**, which pairs from the
+   walk itself and never indexes `hh.actions`.
 3. **`street_index` is positional, not board-derived.** At the first state of each street the card
    hasn't been dealt, so board length lags.
 
-`parse_player_action` asserts `state.actor_index` matches the seat named in the action, which is
-what turns a pairing regression into a `ReplayError` instead of silently wrong pot sizes. It lives
-in `replay.py` so that **every** consumer gets the check: `handview._walk` once had its own copy of
-this logic without it, and rendered postflop calls as checks and raises as bets for months, with
-plausible pot sizes throughout. Do not re-derive the pairing anywhere else.
+### pokerkit repairs what it disagrees with, and heads-up it disagrees
+
+The one to internalise. pokerkit does not reject an action sequence that contradicts its own model
+of the game — it **silently inserts the action it expected** and carries on.
+
+Heads-up, pokerkit opens postflop betting at **index 0 regardless of who posted what**. So index 0
+must be the big blind and index 1 the button — the reverse of every other table size, where index 0
+is the small blind. `_phh_order` does this, `position_of` mirrors it, and the blind amounts are
+written reversed on top (pokerkit posts entry 1 to index 0), so a heads-up array reads
+`[small, big]` and produces `bets = [big, small]`.
+
+Get it backwards and pokerkit thinks the button opens the flop. It reconciles the disagreement by
+inventing a check for the button at the top of every postflop street. That costs no chips, so the
+finishing stacks still reconcile against the site and nothing looks wrong — until a hand where the
+button really did check behind, and the whole replay dies with `Unable to repair the hand history`.
+Meanwhile the phantom states desynchronise `state_actions` from `hh.actions`, which is what made
+postflop calls render as checks and raises as bets.
+
+`iter_action_states` now raises if pokerkit inserts an operation before the last player action, and
+`parse_player_action` asserts `state.actor_index` matches the seat named in the action. Both live in
+`replay.py` so **every** consumer gets them: `handview._walk` once had its own copy of the verb
+resolution without the check, and rendered a hand nobody played. Do not re-derive the pairing
+anywhere else.
 
 Two things pokerkit gives us for free and we should not rebuild: it **validates** betting legality
 (an illegal sequence raises, so a hand that replays is internally consistent), and
-`pokerkit.notation.rake` implements percentage/cap/no-flop-no-drop. Note the limit of that
+`pokerkit.notation.rake` implements percentage/cap/no-flop-no-drop. Note the limits of that
 validation: pokerkit applies each action to whoever *it* thinks is the actor, not to the seat named
-in the PHH line, so a hand can replay cleanly while disagreeing with the file about who acted.
+in the PHH line, and repairs rather than rejects — so "it replayed" means far less than it sounds.
 
 pokerkit also ships site parsers (`HandHistory.from_pokerstars`, `from_partypoker`, …). There is no
 WPN/ACR one, but `PokerStarsParser` is a useful reference when writing it.
@@ -242,7 +257,17 @@ The spec does not cover everything a cash-game study tool needs. These are known
   replay, and resolved into `ActionType`. Never treat them as interchangeable — checking and
   calling are different decisions and a detector keyed on the wrong one measures nothing.
 - **Positions are implicit** in player index + `blinds_or_straddles`. Derived once by
-  `models.position_of()`. Heads up is the trap: the button posts the small blind, so index 0 is BTN.
+  `models.position_of()`. Heads up is the trap, and not in the direction it looks: index 0 is the
+  **BB**, index 1 the button. That is forced by pokerkit's postflop ordering, not by PHH — see
+  "pokerkit repairs what it disagrees with" above.
+- **No slot for an out-of-turn post.** A player buying in mid-orbit posts a live big blind from
+  their own seat. `blinds_or_straddles` is the only place for it and pokerkit reads a third entry as
+  a straddle, which moves where the action starts; an ante is dead money, so the poster pays twice.
+  It is therefore *not posted*: the money enters at the poster's own turn, where their recorded `cc`
+  resolves to a call of the same amount. Recorded as `_pc_live_post` because it is the one place the
+  archive knowingly differs from the site — players acting earlier faced a bigger pot than the
+  replay reports, and the poster's check is named a call. **Refused outright when hero is the
+  poster**, since that would invent a hero decision for the chart layer to judge.
 
 ### Intended layout
 

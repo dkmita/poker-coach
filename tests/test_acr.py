@@ -14,7 +14,9 @@ import pytest
 from poker_coach.ingest.parsers.acr import (
     ParseError, cents, dumps_phh, parse, split_hands, to_phh,
 )
-from poker_coach.models import PHH_HERO_INDEX, PHH_SITE_HAND_ID
+from poker_coach.models import (
+    PHH_HERO_INDEX, PHH_SITE_HAND_ID, Position, position_of,
+)
 from poker_coach.replay import hero_index, iter_decisions
 from pokerkit.notation import HandHistory
 
@@ -62,6 +64,54 @@ DEAD_BLIND = HEADS_UP.replace("Hand #1001", "Hand #1003").replace(
     "*** HOLE CARDS ***", "Villain2 posts $0.10\n*** HOLE CARDS ***"
 )
 
+# A villain buying in mid-orbit: Villain3 posts a big blind out of position from
+# under the gun, then checks their option.
+LIVE_POST = textwrap.dedent("""
+    Hand #1004 - Holdem (No Limit) - $0.05/$0.10 - 2026/08/06 15:25:09 UTC
+    Table1 6-max Seat #1 is the button
+    Seat 1: HeroName ($10.00)
+    Seat 2: Villain1 ($10.00)
+    Seat 3: Villain2 ($10.00)
+    Seat 4: Villain3 ($10.00)
+    Villain1 posts the small blind $0.05
+    Villain2 posts the big blind $0.10
+    Villain3 posts $0.10
+    *** HOLE CARDS ***
+    Dealt to HeroName [Ac Kd]
+    Villain3 checks
+    HeroName raises $0.30 to $0.30
+    Villain1 folds
+    Villain2 folds
+    Villain3 folds
+    Uncalled bet ($0.20) returned to HeroName
+    *** SUMMARY ***
+    Total pot $0.25
+""").strip()
+
+# The same shape with hero doing the posting -- which is refused, because the
+# conversion would turn hero's check into a voluntary call.
+HERO_LIVE_POST = textwrap.dedent("""
+    Hand #1005 - Holdem (No Limit) - $0.05/$0.10 - 2026/08/06 15:26:09 UTC
+    Table1 6-max Seat #1 is the button
+    Seat 1: Villain1 ($10.00)
+    Seat 2: Villain2 ($10.00)
+    Seat 3: Villain3 ($10.00)
+    Seat 4: HeroName ($10.00)
+    Villain2 posts the small blind $0.05
+    Villain3 posts the big blind $0.10
+    HeroName posts $0.10
+    *** HOLE CARDS ***
+    Dealt to HeroName [7s Jd]
+    HeroName checks
+    Villain1 raises $0.30 to $0.30
+    Villain2 folds
+    Villain3 folds
+    HeroName folds
+    Uncalled bet ($0.20) returned to Villain1
+    *** SUMMARY ***
+    Total pot $0.25
+""").strip()
+
 
 def test_cents_never_goes_through_float():
     assert cents("$0.05") == 5
@@ -73,12 +123,20 @@ def test_split_hands():
     assert len(list(split_hands(f"{HEADS_UP}\n\n{SITTING_OUT}"))) == 2
 
 
-def test_heads_up_blinds_are_reversed_for_pokerkit():
-    """pokerkit reads index 0 as the big blind when two players are dealt."""
+def test_heads_up_puts_the_big_blind_at_index_zero():
+    """pokerkit opens postflop betting at index 0 whatever the blinds say.
+
+    Heads up that has to be the big blind, so the order is [BB, button] and the
+    amounts are written reversed to match -- pokerkit posts entry 1 to index 0.
+    Put the button at index 0 instead and pokerkit has it act first on the flop,
+    then covers the disagreement by inventing a check for it.
+    """
     hh = to_phh(HEADS_UP)
-    assert hh.blinds_or_straddles == [10, 5]
+    assert hh.blinds_or_straddles == [5, 10]
     st = hh.create_state()
-    assert list(st.bets) == [5, 10]  # small blind first, as intended
+    assert list(st.bets) == [10, 5]  # index 0 posted the big blind
+    assert position_of(0, 2) is Position.BB
+    assert position_of(1, 2) is Position.BTN
 
 
 def test_hero_and_ids_recorded(): 
@@ -93,9 +151,14 @@ def test_starting_stack_is_before_blinds():
 
 
 def test_players_not_dealt_in_are_excluded():
-    """A seat line is not proof of being in the hand."""
+    """A seat line is not proof of being in the hand.
+
+    Two of the four seats are out, which leaves this hand heads up -- so the
+    order is [BB, button], not the small-blind-first order used at every other
+    table size.
+    """
     hh = to_phh(SITTING_OUT)
-    assert hh.players == ["HeroName", "Villain1"]
+    assert hh.players == ["Villain1", "HeroName"]
 
 
 def test_rake_includes_the_jackpot_fee():
@@ -110,11 +173,38 @@ def test_finishing_stacks_are_set():
     assert hh.finishing_stacks[hero] - hh.starting_stacks[hero] == -10  # lost the bb
 
 
-def test_dead_blind_refused_with_a_reason():
-    """No PHH representation; pokerkit would read it as a straddle and shift
-    where the action starts. Refused rather than silently mis-converted."""
-    with pytest.raises(ParseError, match="dead blind"):
-        to_phh(DEAD_BLIND)
+def test_live_post_is_carried_on_the_posters_own_action():
+    """An out-of-turn post has no PHH slot, so it is not posted at all.
+
+    In `blinds_or_straddles` pokerkit reads it as a straddle and moves where the
+    action starts; as an ante it is dead money and the poster ends up paying
+    twice. Left out, their recorded check resolves to a call of the same amount
+    at their own turn -- same money, same finishing stack, and an action order
+    pokerkit agrees with.
+    """
+    hh = to_phh(LIVE_POST)
+    # Order from the small blind: Villain1, Villain2, Villain3, HeroName.
+    assert hh.players == ["Villain1", "Villain2", "Villain3", "HeroName"]
+    assert hh.blinds_or_straddles == [5, 10, 0, 0]  # the post is not here
+    assert hh.user_defined_fields["_pc_live_post"] == "Villain3:10"
+    # Villain3 still contributes exactly the 10 they posted.
+    v3 = hh.players.index("Villain3")
+    assert hh.starting_stacks[v3] - hh.finishing_stacks[v3] == 10
+
+
+def test_live_post_by_hero_is_refused():
+    """The conversion renames a check to a call. Tolerable for a villain in a
+    hand hero is being studied in; for hero it invents a decision, and the
+    preflop chart layer would go on to judge it."""
+    with pytest.raises(ParseError, match="hero posted out of turn"):
+        to_phh(HERO_LIVE_POST)
+
+
+def test_partial_out_of_turn_post_is_refused():
+    """Only a full big blind rides in on the poster's own action. Anything else
+    is genuinely dead money with nowhere to go."""
+    with pytest.raises(ParseError, match="not the big blind"):
+        to_phh(LIVE_POST.replace("Villain3 posts $0.10", "Villain3 posts $0.05"))
 
 
 def test_source_text_survives_the_round_trip(tmp_path):

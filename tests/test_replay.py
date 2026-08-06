@@ -58,13 +58,35 @@ HAND = textwrap.dedent("""
 """).strip()
 
 
-# Heads-up, and the shape that exposed the pairing bug. Six-handed hands happen
-# to survive positional indexing into `hh.actions` -- pokerkit only appends its
-# extra states at the end -- but heads-up it inserts one at every postflop street
-# transition, so 16 actions come back as 21 pairs and the drift starts at the
-# flop. Hero raises the turn and calls a re-raise: with the old pairing those
-# read as a bet and a call of the wrong size, with every pot still adding up.
+# Heads up, correctly encoded: index 0 is the big blind and index 1 the button,
+# and the blind amounts are written reversed because pokerkit posts entry 1 to
+# index 0. Postflop bet, raise, re-raise, call -- the sequence whose kinds and
+# sizes depend entirely on pairing each action with the state it faced.
 HU_HAND = textwrap.dedent("""
+    variant = "NT"
+    antes = [0, 0]
+    blinds_or_straddles = [5, 10]
+    min_bet = 10
+    starting_stacks = [1010, 990]
+    actions = [
+      "d dh p1 KdAc", "d dh p2 QsTs",
+      "p2 cbr 25", "p1 cbr 100", "p2 cc",
+      "d db 9hQdQh", "p1 cbr 66", "p2 cc",
+      "d db 5s", "p1 cbr 166", "p2 cbr 332", "p1 cbr 844", "p2 cc",
+      "d db Td", "p2 sm QsTs", "p1 sm KdAc",
+    ]
+    finishing_stacks = [20, 1930]
+    currency = "USD"
+    _pc_site = "acr"
+    _pc_site_hand_id = "HU-1"
+    _pc_hero_index = 1
+""").strip()
+
+# The same hand with the button at index 0 -- the encoding this project used
+# until it was found to be wrong. pokerkit disagrees about who opens the flop
+# and repairs the difference by inserting a check for the button, so this
+# replays without complaint and reports a hand nobody played.
+HU_BUTTON_FIRST = textwrap.dedent("""
     variant = "NT"
     antes = [0, 0]
     blinds_or_straddles = [10, 5]
@@ -80,7 +102,7 @@ HU_HAND = textwrap.dedent("""
     finishing_stacks = [1930, 20]
     currency = "USD"
     _pc_site = "acr"
-    _pc_site_hand_id = "HU-1"
+    _pc_site_hand_id = "HU-2"
     _pc_hero_index = 0
 """).strip()
 
@@ -121,24 +143,28 @@ def test_cc_resolves_to_check_or_call(hero_decisions):
     ]
 
 
-def test_state_actions_is_longer_than_the_action_list(hu):
-    """The premise of the bug, asserted so a pokerkit upgrade cannot quietly
-    remove it and leave the workaround looking unnecessary."""
-    pairs = list(hu.state_actions)
-    assert len(pairs) > len(hu.actions)
-    interleaved = [i for i, (_, a) in enumerate(pairs) if a is None]
-    assert any(i < len(hu.actions) for i in interleaved), (
-        "the extra states must appear mid-hand, not only after the last action; "
-        "if they moved to the end this test no longer covers the drift"
-    )
+def test_a_repaired_hand_is_rejected_not_reported(tmp_path):
+    """pokerkit does not reject a sequence it disagrees with, it rewrites one.
+
+    With the button at index 0 it thinks the button opens the flop, and inserts
+    a check nobody made. That costs no chips, so the hand replays, the finishing
+    stacks still reconcile against the site, and the output is a hand that was
+    never played. It has to fail loudly instead.
+    """
+    path = tmp_path / "bad.phh"
+    path.write_text(HU_BUTTON_FIRST)
+    hh = load(path)  # pokerkit itself is perfectly happy with it
+    with pytest.raises(ReplayError, match="repaired"):
+        list(iter_decisions(hh))
 
 
 def test_postflop_actions_are_paired_with_the_state_they_faced(hu):
-    """The regression: positional indexing drifts one action per street.
+    """Each action judged against the state it actually faced.
 
-    Every kind here was wrong before the fix -- the flop call read as a check
-    and both turn raises as bets -- and none of it looked wrong, because the
-    pot sizes it printed were real pot sizes from one action earlier.
+    `to_call` is the only thing separating a check from a call and a bet from a
+    raise, so pairing an action with the wrong state does not produce nonsense
+    -- it produces the wrong verb next to a real pot size from one action
+    earlier, which reads as perfectly ordinary poker.
     """
     acts = list(iter_decisions(hu, hand_id=1))
     got = [(d.street, d.position, d.action, d.to_call) for d in acts]

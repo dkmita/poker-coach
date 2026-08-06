@@ -89,7 +89,7 @@ class Position(Enum):
 # the late ones -- a CO is a CO whether the table is 6-handed or 4-handed, which
 # is what keeps charts comparable across table sizes.
 POSITIONS_BY_PLAYER_COUNT: dict[int, tuple[Position, ...]] = {
-    2: (Position.BTN, Position.BB),  # heads up: the button posts the small blind
+    2: (Position.BB, Position.BTN),  # heads up: see position_of
     3: (Position.BTN, Position.SB, Position.BB),
     4: (Position.CO, Position.BTN, Position.SB, Position.BB),
     5: (Position.HJ, Position.CO, Position.BTN, Position.SB, Position.BB),
@@ -124,7 +124,17 @@ def position_of(player_index: int, players_dealt: int) -> Position:
         raise ValueError(f"player index {player_index} out of range for {players_dealt}")
 
     if players_dealt == 2:
-        return (Position.BTN, Position.BB)[player_index]
+        # Heads up the big blind is index 0 and the button (who posts the small
+        # blind) is index 1 -- the reverse of every other table size, where
+        # index 0 is the small blind.
+        #
+        # This is not a choice. pokerkit always opens postflop betting at index
+        # 0, so putting the button there makes it act first on the flop when it
+        # should act last. It papers over the disagreement by inserting a check
+        # the player never made, which mostly goes unnoticed -- until a hand
+        # where the button really does check behind, and then the whole replay
+        # fails with "Unable to repair the hand history".
+        return (Position.BB, Position.BTN)[player_index]
     # index 0 -> SB, 1 -> BB, then wrap to the earliest position and run to BTN.
     order = (Position.SB, Position.BB, *layout[: layout.index(Position.SB)])
     return order[player_index]

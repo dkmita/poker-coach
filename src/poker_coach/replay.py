@@ -118,12 +118,10 @@ def big_blind(hh: HandHistory) -> Cents:
     blinds = hh.blinds_or_straddles or []
     if len(blinds) < 2:
         raise ReplayError("blinds_or_straddles must have at least two entries")
-    # pokerkit swaps the two entries heads-up, so a two-handed array is
-    # [big, small] while three or more is [small, big, ...]. Reading index 1
-    # unconditionally halves the big blind heads-up, which then doubles every
-    # bb-denominated figure downstream -- a $10 stack at 5c/10c rendering as
-    # "198bb effective" is how this surfaced.
-    return int(blinds[0] if len(blinds) == 2 else blinds[1])
+    # Index 1 at every table size. Heads-up pokerkit posts the array reversed --
+    # entry 1 goes to the player at index 0 -- so the entry is not that player's
+    # own post, but it is still the big blind, which is all this needs.
+    return int(blinds[1])
 
 
 def _card(card: object) -> str:
@@ -194,10 +192,32 @@ def iter_action_states(hh: HandHistory) -> Iterator[ActionState]:
     interleaves states for its own automatic operations and the two sequences
     are different lengths. See the module docstring.
     """
+    # pokerkit does not reject an action sequence it disagrees with -- it
+    # *repairs* it, silently inserting the action it expected. That is how a
+    # heads-up encoding that had the blinds the wrong way round survived: a
+    # phantom check for the button at the top of every postflop street, which
+    # costs no chips, so even reconciling against the site's finishing stacks
+    # did not notice. A repair shows up as a state with no action while a player
+    # still has one pending; the automatic operations that are legitimate
+    # (runout selection, showdown, pushing chips) all come after the last one.
+    last_player = -1
+    for i, raw in enumerate(hh.actions):
+        m = _PLAYER_ACTION.match(raw.strip())
+        if m is not None and m["verb"] not in ("sm", "sd", "pb"):
+            last_player = i
+
     facing: dict | None = None
     index = -1
     for state, applied in hh.state_actions:
-        if applied is not None:
+        if applied is None:
+            if 0 <= index < last_player:
+                raise ReplayError(
+                    f"pokerkit repaired the hand after action {index} "
+                    f"({hh.actions[index]!r}): it inserted an operation the file "
+                    f"does not contain, so the file disagrees with it about who "
+                    f"acts or what they did"
+                )
+        else:
             index += 1
             if index >= len(hh.actions):
                 break  # pokerkit replayed more than the file declared

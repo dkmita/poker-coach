@@ -200,13 +200,78 @@ def _phh_order(h: _Hand) -> list[str]:
     Derived from who actually posted rather than from the button, because the
     button-relative rule flips heads-up and an inverted position map is the kind
     of bug that produces plausible output.
+
+    Heads up the order starts from the **big** blind instead. pokerkit opens
+    postflop betting at index 0 regardless of who posted what, so the seat put
+    there is the seat it will have act first on the flop -- and heads up that is
+    the big blind, not the button. Getting this backwards does not fail loudly:
+    pokerkit inserts a check for the button to reconcile the disagreement, which
+    is invisible unless the button really did check behind, and then the whole
+    hand dies with "Unable to repair the hand history".
     """
     by_seat = list(h.seats.items())
-    if not h.sb_name:
-        raise ParseError(f"hand {h.hand_id}: no small blind posted")
-    start = next(i for i, (_, name) in enumerate(by_seat) if name == h.sb_name)
+    first = h.bb_name if len(by_seat) == 2 else h.sb_name
+    if not first:
+        raise ParseError(f"hand {h.hand_id}: no blind posted")
+    start = next(i for i, (_, name) in enumerate(by_seat) if name == first)
     rotated = by_seat[start:] + by_seat[:start]
     return [name for _, name in rotated]
+
+
+def _live_post(h: _Hand) -> tuple[str, Cents] | None:
+    """The out-of-turn post this hand can be converted with, or None.
+
+    A player buying in mid-orbit posts a big blind out of position. It has no
+    PHH equivalent: `blinds_or_straddles` is the only place to put it, and
+    pokerkit reads a third entry as a straddle, which moves where the action
+    starts -- in hand 2794090528 from index 2 to index 4. An ante is wrong too,
+    because the post is live: the poster can check behind the big blind.
+
+    So it is not posted at all. The money enters instead at the poster's own
+    turn, where their recorded `cc` -- a check, because the post already covers
+    the blind -- resolves to a call of exactly the amount they posted. Same
+    contribution, same finishing stack, same action order, and unlike the
+    straddle reading, one pokerkit agrees with.
+
+    Two costs, both real. Anyone acting *before* the poster sees a pot short by
+    the post. And the poster's check is recorded as a call -- the distinction
+    PHH already blurs and this codebase refuses to blur, because a limp and a
+    check from the blind are different decisions.
+
+    Which is why **hero may not be the poster**. For a villain this costs a
+    misnamed action in a hand hero is being studied in; for hero it invents a
+    voluntary call that never happened, and the preflop chart layer would judge
+    it -- hand 2794340475 would report hero limping J7o under the gun when hero
+    posted to sit down and checked their option. Refused rather than
+    approximated whenever the shape does not hold exactly.
+    """
+    if not h.dead_posts:
+        return None
+    if h.hero in h.dead_posts:
+        raise ParseError(
+            f"hand {h.hand_id}: hero posted out of turn; carrying it on hero's "
+            "own action would record a check as a voluntary call"
+        )
+    if len(h.dead_posts) > 1:
+        raise ParseError(
+            f"hand {h.hand_id}: {len(h.dead_posts)} out-of-turn posts; "
+            "only a single one can be carried on the poster's own action"
+        )
+    name = next(iter(h.dead_posts))
+    amount = h.posts.get(name, 0)
+    if amount != h.bb:
+        raise ParseError(
+            f"hand {h.hand_id}: {name} posted {amount} out of turn, not the "
+            f"big blind ({h.bb}); no representation for a partial or dead post"
+        )
+    first = next((a for a in h.actions if a[0] == name), None)
+    if first is None or first[1] != "cc":
+        raise ParseError(
+            f"hand {h.hand_id}: {name} posted out of turn but their first "
+            f"action is {first[1] if first else 'absent'!r}, not a check; the "
+            "post has no action to ride in on"
+        )
+    return name, amount
 
 
 def to_phh(block: str, *, source_file: str = "") -> HandHistory:
@@ -214,19 +279,7 @@ def to_phh(block: str, *, source_file: str = "") -> HandHistory:
     h = _scan(block)
     if not h.hand_id:
         raise ParseError("no hand header")
-    if h.dead_posts:
-        # A dead blind -- a player buying in mid-orbit -- has no PHH equivalent.
-        # Putting the amount in `blinds_or_straddles` makes pokerkit read it as a
-        # straddle, which moves where the action starts: in hand 2794090528 that
-        # shifted first-to-act from index 2 to index 4. Modelling it as an ante
-        # is also wrong, because the post is live (the poster can check behind
-        # the big blind). Refused explicitly rather than converted incorrectly:
-        # a hand that silently replays with the wrong action order is worse than
-        # one that is skipped.
-        raise ParseError(
-            f"hand {h.hand_id}: dead blind posted by "
-            f"{', '.join(sorted(h.dead_posts))}; no PHH representation"
-        )
+    live_post = _live_post(h)
     order = _phh_order(h)
     index = {name: i for i, name in enumerate(order)}
     if h.hero not in index:
@@ -237,13 +290,15 @@ def to_phh(block: str, *, source_file: str = "") -> HandHistory:
     # the $0.10 big blind and folds appears at $9.90 in the next hand. Adding the
     # post back double-counts it.
     starting = [h.stacks[n] for n in order]
-    blinds = [h.posts.get(n, 0) for n in order]
+    # The out-of-turn post is deliberately not posted; see `_live_post`.
+    blinds = [
+        0 if (live_post and n == live_post[0]) else h.posts.get(n, 0) for n in order
+    ]
     if len(order) == 2:
-        # pokerkit swaps the two entries heads-up: passing (5, 10) yields
-        # bets=[10, 5], i.e. it reads index 0 as the big blind. Verified
-        # directly, and undocumented. `order` stays [SB, BB] -- which is what
-        # position_of expects, since the heads-up button posts the small blind --
-        # so only the amounts are reversed.
+        # pokerkit posts the two entries reversed heads-up: passing (5, 10)
+        # yields bets=[10, 5]. Verified directly, and undocumented. `order` is
+        # [BB, button] (see `_phh_order`), so the amounts have to be written
+        # [small, big] for the big blind to land on index 0.
         blinds = [blinds[1], blinds[0]]
 
     actions: list[str] = [
@@ -292,6 +347,16 @@ def to_phh(block: str, *, source_file: str = "") -> HandHistory:
             # without going back to the client's export folder.
             PHH_SOURCE_TEXT: block,
             "_pc_source_file": source_file,
+            # An out-of-turn post carried on the poster's own action instead of
+            # being posted before the deal (see `_live_post`). Recorded because
+            # it is the one place this archive knowingly differs from the site:
+            # players acting before this seat faced a pot larger by this amount
+            # than the replay reports.
+            **(
+                {"_pc_live_post": f"{live_post[0]}:{live_post[1]}"}
+                if live_post
+                else {}
+            ),
         },
     )
     try:

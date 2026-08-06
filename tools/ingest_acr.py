@@ -36,7 +36,19 @@ def main() -> int:
     for f in files:
         for hand_id, result in parse(f.read_text(errors="replace"), source_file=f.name):
             if isinstance(result, ParseError):
-                reason = "dead blind" if "dead blind" in str(result) else "replay failed"
+                text = str(result)
+                reason = next(
+                    (
+                        label
+                        for needle, label in (
+                            ("posted out of turn", "out-of-turn post"),
+                            ("out of turn", "out-of-turn post"),
+                            ("dead blind", "out-of-turn post"),
+                        )
+                        if needle in text
+                    ),
+                    "replay failed",
+                )
                 skipped[reason] += 1
                 print(f"  skip {hand_id}: {str(result).split(': ', 1)[-1]}")
                 continue
