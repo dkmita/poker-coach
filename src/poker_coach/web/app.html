@@ -313,14 +313,6 @@
   .fact b { color: var(--dim); font-weight: 600; margin-right: 5px; text-transform: uppercase; font-size: 10px; letter-spacing: .06em; }
   .fact span { font-variant-numeric: tabular-nums; }
 
-  .gto { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 11px; }
-  .gto .label { font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); font-weight: 700; margin-bottom: 8px; }
-  .freq { display: grid; grid-template-columns: 60px 1fr 46px; gap: 9px; align-items: center; margin-bottom: 5px; font-size: 13px; }
-  .freq .bar { height: 7px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
-  .freq .bar i { display: block; height: 100%; background: var(--hero); }
-  .freq .pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
-  .freq.taken .n { color: var(--good); font-weight: 650; }
-  .mixed { color: var(--warn); font-size: 11px; margin-top: 7px; }
   .none { color: var(--dim); font-size: 12px; font-style: italic; }
   .dimnote { color: var(--dim); }
   .result { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--dim); font-size: 13px; }
@@ -335,7 +327,6 @@
     /* Let the action rows reflow rather than hold three rigid columns. */
     .act { grid-template-columns: 46px 60px 76px 1fr; gap: 8px; padding: 6px 12px; }
     .street > header { flex-wrap: wrap; gap: 8px; }
-    .freq { grid-template-columns: 52px 1fr 40px; }
   }
 </style>
 </head>
@@ -561,8 +552,6 @@ function renderAction(a, d) {
     <summary>${head}${renderVerdict(d)}<span class="chev">›</span></summary>
     <div class="decbody">
       <div class="facts">${decisionFacts(d)}</div>
-      ${renderGto(d)}
-      ${renderAnalysis(d)}
     </div>
   </details>`;
 }
@@ -582,39 +571,10 @@ function decisionFacts(d) {
     : bb(d.pot_before_bb)]);
   if (d.spr !== null) f.push(["SPR", d.spr]);
   if (d.stack_before_bb !== null) f.push(["stack", bb(d.stack_before_bb)]);
-  if (d.facing) {
-    f.push(["facing", `${d.facing.position} ${d.facing.action} to ${bb(d.facing.to_bb)}${
-      d.facing.all_in ? " all-in" : ""}`]);
-  }
   return f.map(([k, v, work]) => work
     ? `<div class="fact hint" data-tip="${esc(work)}"><b>${k}</b><span>${v}</span>` +
       `<button class="info" type="button" aria-label="How this is worked out">i</button></div>`
     : `<div class="fact"><b>${k}</b><span>${v}</span></div>`).join("");
-}
-
-function renderAnalysis(d) {
-  return `<div class="gto"><div class="label">Analysis</div>${
-    d.analysis ? d.analysis.comment : `<div class="none">Not analyzed yet.</div>`}</div>`;
-}
-
-function renderGto(d) {
-  if (!d.gto) {
-    return `<div class="gto"><div class="label">Equilibrium</div>
-      <div class="none">Not looked up — no chart for this spot.</div></div>`;
-  }
-  const rows = d.gto.actions.map(a => {
-    const taken = a.action === d.hero_action;
-    return `<div class="freq${taken ? " taken" : ""}">
-      <div class="n">${a.action}</div>
-      <div class="bar"><i style="width:${(a.frequency * 100).toFixed(0)}%"></i></div>
-      <div class="pct">${(a.frequency * 100).toFixed(0)}%</div></div>`;
-  }).join("");
-  // A genuinely mixed node means deviating is not a mistake. Saying so is the
-  // difference between a tool a player trusts and one they stop believing.
-  const mixed = d.gto.mixed
-    ? `<div class="mixed">Mixed strategy — more than one action is correct here.</div>` : "";
-  return `<div class="gto"><div class="label">Equilibrium · ${d.gto.source || d.gto.provider}</div>
-    ${rows}${mixed}</div>`;
 }
 
 // The chart is a link, not a citation: a verdict you cannot check is worth
