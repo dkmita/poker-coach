@@ -12,6 +12,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The model layer is optional: `NullLLM` is the default and everything runs
+# without it. `llm.py` imports anthropic inside the call for the same reason.
+llm = ["anthropic>=0.40"]
 dev = ["pytest>=8"]
 
 [build-system]

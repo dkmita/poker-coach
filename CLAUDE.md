@@ -312,62 +312,67 @@ src/poker_coach/
 └── cli.py               # ingest / triage / analyze / report / run
 ```
 
-## Claude Agent SDK notes
+## Model access
 
-This project uses the **Claude Agent SDK** (`pip install claude-agent-sdk`) — the Claude Code
-harness as a library. It is *not* the Anthropic API SDK's tool runner; the two are easy to
-conflate and have different imports and different capabilities. Reference:
-https://code.claude.com/docs/en/agent-sdk/python
+This project uses the **Anthropic API SDK** (`pip install anthropic`), not the Claude Agent SDK.
+That was reconsidered deliberately: the Agent SDK is Claude Code packaged as a library — built-in
+file/bash tools, an agent loop, sessions, permissions — and every model call here is a single
+request with a stable prefix and a short structured answer. The loop, the tools and the sandbox
+would all be unused, and the model would be handed filesystem access it has no need for.
 
-Shape of an analysis stage:
+If a stage ever does want the model to call `hand_equity` or a chart lookup itself, the thing to
+reach for is `client.beta.messages.tool_runner` — still the `anthropic` package, custom tools only,
+no sandbox. The Agent SDK earns its weight only for an agent that needs to read and write files.
+
+### The boundary
+
+`llm.py` is the only module that knows a vendor exists. One method:
 
 ```python
-from claude_agent_sdk import tool, create_sdk_mcp_server, query, ClaudeAgentOptions
-
-@tool("hand_equity", "Equity of a holding vs a range on a given board", {"hero": str, "villain_range": str, "board": str})
-async def hand_equity(args: dict) -> dict:
-    return {"content": [{"type": "text", "text": ...}]}
-
-poker = create_sdk_mcp_server(name="poker", version="1.0.0", tools=[hand_equity, ...])
-
-options = ClaudeAgentOptions(
-    model="claude-opus-5",
-    thinking={"type": "adaptive"},
-    mcp_servers={"poker": poker},
-    allowed_tools=["mcp__poker__*"],
-    max_budget_usd=...,        # hard cap on a nightly run
-)
+class LLM(Protocol):
+    name: str
+    def complete(self, *, system: str, prompt: str, max_tokens: int) -> Reply | None: ...
 ```
 
-Non-obvious things that will bite:
+- **`NullLLM` is the default.** No key configured means every estimate comes back `None` and the
+  pipeline runs to completion for free. A test suite that needed credentials is a test suite nobody
+  runs, so `StubLLM` answers from a canned list and records what it was asked.
+- **Unavailable returns `None`, never raises** — same contract as `SolutionProvider`. No key, no
+  network, rate limit, 500, unparseable answer: all one thing to the caller, which is one missing
+  estimate rather than a dead run.
+- Swapping vendors is one class. `AnthropicLLM` is about thirty lines of it.
+- `anthropic` is imported inside the call, so it stays an optional dependency and importing
+  `poker_coach` does not require it.
 
-- **Tool names are `mcp__{server_key}__{tool_name}`.** The server key is the key in `mcp_servers`,
-  not the `name=` passed to `create_sdk_mcp_server`. Wildcards work: `mcp__poker__*`.
-- **The Python dict schema makes every key required.** For an optional parameter, leave it out of
-  the schema, document it in the description string, and read it with `args.get()`. Use a full
-  JSON Schema dict instead when you need enums or ranges.
-- **`structuredContent` is unavailable** from Python in-process tools — the `@tool` decorator
-  forwards only `content` and `is_error`. Tool results come back as text, so serialize
-  deliberately (JSON in a text block) rather than expecting typed fields.
-- **`tools`, `allowed_tools`, and `disallowed_tools` are different layers.** `tools=[...]` controls
-  which built-ins exist in context; `allowed_tools` only pre-approves permission. To keep a
-  built-in out entirely, omit it from `tools` or list its bare name in `disallowed_tools`.
-- **Return failures as `{"content": [...], "is_error": True}`** rather than raising. Handler
-  exceptions don't stop the loop; they reach Claude as a bare exception string with no context.
-- **Mark read-only tools** with `annotations=ToolAnnotations(readOnlyHint=True)` — that's what lets
-  Claude batch equity and corpus lookups in parallel.
-- **Use `max_budget_usd`** on every batch entry point. An unattended overnight run over hundreds of
-  hands is exactly the workload that needs a ceiling.
-- **Model:** `claude-opus-5`, with `thinking={"type": "adaptive"}`. Do not use `budget_tokens` — it
-  is removed on this model and returns a 400.
-- Prefer `query()` for per-hand analysis (fresh context per hand) and `ClaudeSDKClient` only where
-  a stage genuinely needs multi-turn continuity.
+### Ask for a range, not a number
+
+The model's job is to estimate **the opponent's range**, and nothing else. Equity, pot odds and EV
+are computed from that range by `equity.py`, exactly.
+
+This is the whole design, so it is worth being explicit about why:
+
+- Arithmetic is the thing a model is worst at and the thing that is cheapest to do properly.
+- A range is **checkable**. It renders as the same 13×13 grid a chart does, so a wrong one is
+  visible at a glance; a wrong EV figure is not.
+- A range is **cacheable on `spot_key`**, because it does not depend on hero's cards — the same
+  rule the solver cache follows, and for the same reason.
+- Model ranges and chart ranges become the same object downstream, both parsed by `parse_range`.
+
+`RangeEstimator` caches on `(spot_key, board)` and does not retry a spot that failed: otherwise a
+spot the model cannot answer is paid for on every hand that reaches it.
 
 ### Prompt caching
 
-Analysis runs the same system prompt and the same range/chart context across hundreds of hands, so
-caching matters more than usual. Keep the stable prefix byte-identical: system prompt and chart
-data first, per-hand content last, and no timestamps or run IDs anywhere in the prefix.
+The system prompt is the task description followed by `heuristics/`, in that order, and must be
+byte-identical across hands — it is sent as a cached block. Nothing about a specific hand may
+appear in it. Editing a heuristic invalidates the cache for the rest of the run, which is the right
+trade and still worth knowing before editing mid-run.
+
+**Model:** `claude-opus-5` with `thinking={"type": "adaptive"}`. Do not pass `budget_tokens` — it is
+rejected on this model family.
+
+**Budget:** `Budget` caps a batch in requests and in dollars, and is checked before each call. An
+unattended run over a session must not be able to cost an unbounded amount.
 
 ## Conventions
 
