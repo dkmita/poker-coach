@@ -134,19 +134,35 @@ class AnthropicLLM:
     # on this model family.
     thinking: bool = True
     api_key: str | None = None
+    # Point at a gateway that speaks the Anthropic API rather than at Anthropic.
+    # Enough for any proxy that is wire-compatible; one that speaks a different
+    # shape wants its own class, which is what the protocol is for.
+    base_url: str | None = None
+    # For gateways that authenticate with something other than `x-api-key`.
+    headers: dict[str, str] = field(default_factory=dict)
     name: str = field(init=False, default="anthropic")
     _client: object | None = field(init=False, default=None, repr=False)
 
     def _connect(self) -> object | None:
-        if self._client is None:
-            key = self.api_key or os.environ.get("ANTHROPIC_API_KEY")
-            if not key:
-                return None
-            try:
-                import anthropic
-            except ImportError:
-                return None
-            self._client = anthropic.Anthropic(api_key=key)
+        if self._client is not None:
+            return self._client
+        base = self.base_url or os.environ.get("ANTHROPIC_BASE_URL")
+        key = self.api_key or os.environ.get("ANTHROPIC_API_KEY")
+        # A gateway may authenticate by header instead of by key, so a key is
+        # only required when talking to Anthropic directly. Something must be
+        # configured, though -- otherwise this is `NullLLM` with extra steps.
+        if not key and not base:
+            return None
+        try:
+            import anthropic
+        except ImportError:
+            return None
+        opts: dict[str, object] = {"api_key": key or "unused"}
+        if base:
+            opts["base_url"] = base
+        if self.headers:
+            opts["default_headers"] = dict(self.headers)
+        self._client = anthropic.Anthropic(**opts)
         return self._client
 
     def complete(

@@ -111,3 +111,37 @@ def test_the_hand_never_leaks_into_the_cached_prefix():
     call = llm.calls[0]
     assert "QsTs" in call["prompt"]
     assert "QsTs" not in call["system"]
+
+
+def test_a_gateway_can_stand_in_for_anthropic(monkeypatch):
+    """Any proxy speaking the Anthropic wire format is a base_url away.
+
+    One that speaks a different shape wants its own class -- which is the whole
+    reason `LLM` is a protocol rather than a subclass of this.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    seen: dict[str, object] = {}
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+    import anthropic
+
+    monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropic)
+    llm = AnthropicLLM(
+        base_url="https://gateway.example/v1",
+        headers={"Authorization": "Bearer t"},
+    )
+    assert llm._connect() is not None
+    assert seen["base_url"] == "https://gateway.example/v1"
+    assert seen["default_headers"] == {"Authorization": "Bearer t"}
+    # A gateway may authenticate by header, so no key is needed -- but the
+    # client still wants the argument populated.
+    assert seen["api_key"] == "unused"
+
+
+def test_neither_key_nor_gateway_is_still_a_none(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    assert AnthropicLLM()._connect() is None

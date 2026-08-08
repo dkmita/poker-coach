@@ -374,6 +374,17 @@ rejected on this model family.
 **Budget:** `Budget` caps a batch in requests and in dollars, and is checked before each call. An
 unattended run over a session must not be able to cost an unbounded amount.
 
+### Pointing at a gateway
+
+`AnthropicLLM` takes `base_url` and `headers` (or reads `ANTHROPIC_BASE_URL`), which is enough for
+any proxy that speaks the Anthropic wire format, including ones that authenticate by header rather
+than by `x-api-key`. A gateway speaking a different shape — an OpenAI-style `/chat/completions`, say
+— wants its own class implementing `LLM`, which is the reason that is a protocol.
+
+One caveat that is not technical: this is a personal repo for a hobby project. Routing it through an
+employer's inference infrastructure is a question about acceptable use, not about wiring, and the
+wiring being easy is not an answer to it.
+
 ## Conventions
 
 - Prompts live in `agent/prompts/` as files, not inline string literals.
