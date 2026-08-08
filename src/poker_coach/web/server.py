@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, urlparse
 from .. import handview
 from ..replay import ReplayError, hero_index, load, project_index
 from ..solvers.base import NullProvider, SolutionProvider
+from ..heuristics import Heuristics
 from ..solvers.ranges import ChartProvider
 
 APP_HTML = Path(__file__).with_name("app.html")
@@ -224,7 +225,7 @@ class Archive:
         }
 
 
-def make_handler(archive: Archive):
+def make_handler(archive: Archive, heuristics: Heuristics):
     class Handler(BaseHTTPRequestHandler):
         # Default logging prints a line per request, which drowns the startup
         # banner the moment the page loads its list.
@@ -250,6 +251,19 @@ def make_handler(archive: Archive):
 
         def do_PUT(self) -> None:  # noqa: N802 - stdlib naming
             url = urlparse(self.path)
+            if url.path.startswith("/api/heuristics/"):
+                slug = url.path.rsplit("/", 1)[-1]
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                try:
+                    if not _SAFE_NAME.match(slug):
+                        raise KeyError(slug)
+                    heuristics.write(slug, body.get("body", ""))
+                except KeyError:
+                    self._json({"error": "no such heuristic"}, 404)
+                    return
+                self._json({"ok": True})
+                return
             if not url.path.startswith("/api/charts/") or not url.path.endswith("/notes"):
                 self._json({"error": "not found"}, 404)
                 return
@@ -287,6 +301,24 @@ def make_handler(archive: Archive):
                 except ValueError:
                     tz = 0
                 self._json(archive.summaries(offset, limit, kind=kind, tz_offset=tz))
+                return
+
+            if url.path == "/api/heuristics":
+                self._json({
+                    "items": [
+                        {"slug": h.slug, "title": h.title, "order": h.order}
+                        for h in heuristics.all()
+                    ]
+                })
+                return
+
+            if url.path.startswith("/api/heuristics/"):
+                slug = url.path.rsplit("/", 1)[-1]
+                item = heuristics.get(slug) if _SAFE_NAME.match(slug) else None
+                if item is None:
+                    self._json({"error": "no such heuristic"}, 404)
+                    return
+                self._json({"slug": item.slug, "title": item.title, "body": item.body})
                 return
 
             if url.path == "/api/charts":
@@ -329,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--archive", type=Path, default=Path("archive/synthetic"))
     ap.add_argument("--charts", type=Path, default=Path("charts"))
+    ap.add_argument("--heuristics", type=Path, default=Path("heuristics"))
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args(argv)
 
@@ -356,7 +389,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\n  http://127.0.0.1:{args.port}\n")
 
     # Localhost only: the archive is personal match data and there is no auth.
-    ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(archive)).serve_forever()
+    ThreadingHTTPServer(
+        ("127.0.0.1", args.port), make_handler(archive, Heuristics(args.heuristics))
+    ).serve_forever()
     return 0
 
 

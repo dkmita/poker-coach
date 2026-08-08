@@ -17,6 +17,7 @@ from urllib.error import HTTPError
 import pytest
 
 from poker_coach.solvers.ranges import ChartProvider
+from poker_coach.heuristics import Heuristics
 from poker_coach.web.server import Archive, make_handler
 
 HAND = textwrap.dedent("""
@@ -50,7 +51,7 @@ def server(tmp_path):
     (spot / "raise.txt").write_text("AJo:0.2")
 
     archive = Archive(archive_dir, ChartProvider(charts, source="test"))
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(archive))
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(archive, Heuristics(tmp_path)))
     Thread(target=httpd.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{httpd.server_port}"
     httpd.shutdown()
@@ -127,12 +128,13 @@ def test_counts_are_empty_until_a_filter_is_used(tmp_path):
     from http.server import ThreadingHTTPServer
     from threading import Thread
 
+    from poker_coach.heuristics import Heuristics
     from poker_coach.web.server import Archive, make_handler
 
     d = tmp_path / "a"
     d.mkdir()
     (d / "h.phh").write_text(HAND)
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Archive(d, ChartProvider(tmp_path))))
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Archive(d, ChartProvider(tmp_path)), Heuristics(tmp_path)))
     Thread(target=httpd.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{httpd.server_port}"
     try:
@@ -157,3 +159,61 @@ def test_interesting_filter_is_hero_centric(server):
 def test_unknown_filter_falls_back_to_all(server):
     assert get(server, "/api/hands?filter=nonsense")["total"] == \
         get(server, "/api/hands")["total"]
+
+
+# ---- heuristics -------------------------------------------------------------
+
+def test_heuristics_are_ordered_by_filename_prefix(tmp_path):
+    """The files are assembled into a prompt, so their order is part of it and
+    cannot be left to whatever the directory listing returns."""
+    from poker_coach.heuristics import Heuristics
+
+    (tmp_path / "10-later.md").write_text("# Later\n\nsecond\n")
+    (tmp_path / "02-earlier.md").write_text("# Earlier\n\nfirst\n")
+    h = Heuristics(tmp_path)
+    assert [x.slug for x in h.all()] == ["earlier", "later"]
+    assert [x.title for x in h.all()] == ["Earlier", "Later"]
+    # Numeric, not lexicographic: "10" must not sort before "02".
+    assert h.prompt() == "# Earlier\n\nfirst\n\n# Later\n\nsecond"
+
+
+def test_a_file_without_a_heading_still_lists(tmp_path):
+    from poker_coach.heuristics import Heuristics
+
+    (tmp_path / "01-no-heading.md").write_text("just prose\n")
+    assert Heuristics(tmp_path).all()[0].title == "no heading"
+
+
+def test_files_not_matching_the_convention_are_ignored(tmp_path):
+    """A stray README in the directory must not end up in the prompt."""
+    from poker_coach.heuristics import Heuristics
+
+    (tmp_path / "01-real.md").write_text("# Real\n\nyes\n")
+    (tmp_path / "README.md").write_text("# Readme\n\nno\n")
+    (tmp_path / "notes.txt").write_text("no\n")
+    h = Heuristics(tmp_path)
+    assert [x.slug for x in h.all()] == ["real"]
+    assert "Readme" not in h.prompt()
+
+
+def test_writing_reads_back_and_an_unknown_slug_raises(tmp_path):
+    from poker_coach.heuristics import Heuristics
+
+    (tmp_path / "01-thing.md").write_text("# Thing\n\nbefore\n")
+    h = Heuristics(tmp_path)
+    h.write("thing", "# Thing\n\nafter\n")
+    assert h.get("thing").body == "# Thing\n\nafter\n"
+    with pytest.raises(KeyError):
+        h.write("nope", "x")
+
+
+def test_the_prompt_is_byte_stable_across_calls(tmp_path):
+    """It is a cache prefix. Anything that varies between calls -- ordering,
+    trailing whitespace -- costs a cache miss on every hand in the run."""
+    from poker_coach.heuristics import Heuristics
+
+    (tmp_path / "01-a.md").write_text("# A\n\none\n\n\n")
+    (tmp_path / "02-b.md").write_text("# B\n\ntwo\n")
+    h = Heuristics(tmp_path)
+    assert h.prompt() == h.prompt()
+    assert not h.prompt().endswith("\n")

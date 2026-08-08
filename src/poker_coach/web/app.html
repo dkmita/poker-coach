@@ -332,7 +332,7 @@
 </head>
 <body>
   <div id="list">
-    <div id="tabs"><button class="tab on" data-tab="hands">Hands</button><button class="tab" data-tab="charts">Charts</button></div>
+    <div id="tabs"><button class="tab on" data-tab="hands">Hands</button><button class="tab" data-tab="charts">Charts</button><button class="tab" data-tab="heuristics">Heuristics</button></div>
     <div id="filters"><button class="filt on" data-f="all">All</button><button class="filt bad" data-f="flagged">Preflop</button><button class="filt warn" data-f="interesting">Interesting</button><button class="filt" data-f="terminal">Terminal</button></div>
     <div id="rows"></div><div id="more">load more</div>
   </div>
@@ -780,6 +780,55 @@ async function openChart(spot, el, highlight) {
   }
 }
 
+// ---- heuristics ----
+// The standing guidance the range-estimating model is given. Editable here
+// because it is the part of the system most worth changing after reading a
+// hand, and a prompt you cannot edit without a deploy is a prompt that rots.
+async function loadHeuristics() {
+  const r = await fetch("/api/heuristics").then(r => r.json());
+  listMode = "heuristics";
+  $("#filters").style.display = "none";
+  $("#more").style.display = "none";
+  $("#rows").innerHTML = "";
+  if (!r.items.length) {
+    $("#rows").innerHTML = `<div class="row"><div class="meta">None found.</div></div>`;
+    return;
+  }
+  for (const h of r.items) {
+    const el = document.createElement("div");
+    el.className = "row";
+    el.dataset.heuristic = h.slug;
+    el.innerHTML = `<div class="pos">${String(h.order).padStart(2, "0")}</div>
+      <div><div class="meta">${h.title}</div></div><div></div>`;
+    el.onclick = () => openHeuristic(h.slug, el);
+    $("#rows").appendChild(el);
+  }
+}
+
+async function openHeuristic(slug, el) {
+  if (active) active.classList.remove("active");
+  if (el) { active = el; el.classList.add("active"); }
+  history.replaceState(null, "", "#heuristic:" + slug);
+  const h = await fetch(`/api/heuristics/${encodeURIComponent(slug)}`).then(r => r.json());
+  if (h.error) { $("#detail").innerHTML = `<div class="empty">${h.error}</div>`; return; }
+  $("#detail").innerHTML = `
+    <h2>${esc(h.title)}</h2>
+    <div class="sub">heuristics/${esc(slug)}.md — given to the model as standing context</div>
+    <textarea class="notes" id="hbody" spellcheck="false">${esc(h.body)}</textarea>
+    <div class="saverow"><button class="btn" id="hsave">Save</button>
+      <span class="saved" id="hsaved"></span></div>`;
+  $("#hbody").style.minHeight = "60vh";
+  $("#hsave").onclick = async () => {
+    await fetch(`/api/heuristics/${encodeURIComponent(slug)}`, {
+      method: "PUT", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ body: $("#hbody").value }),
+    });
+    $("#hsaved").textContent = "saved";
+    setTimeout(() => { $("#hsaved").textContent = ""; }, 1800);
+  };
+  $("#detail").scrollTop = 0;
+}
+
 function setTab(name) {
   document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x.dataset.tab === name));
 }
@@ -788,9 +837,11 @@ document.querySelectorAll(".tab").forEach(t => {
   t.onclick = () => {
     setTab(t.dataset.tab);
     active = null;
-    $("#detail").innerHTML = `<div class="empty">Select a ${t.dataset.tab === "hands" ? "hand" : "chart"}</div>`;
+    const noun = { hands: "hand", charts: "chart", heuristics: "heuristic" }[t.dataset.tab];
+    $("#detail").innerHTML = `<div class="empty">Select a ${noun}</div>`;
     history.replaceState(null, "", "#");
     if (t.dataset.tab === "charts") loadCharts();
+    else if (t.dataset.tab === "heuristics") loadHeuristics();
     else loadList();
   };
 });
@@ -826,6 +877,14 @@ async function route() {
     const row = $(`.row[data-spot="${CSS.escape(spot)}"]`);
     if (row) row.scrollIntoView({ block: "nearest" });
     await openChart(spot, row, hand);
+    return;
+  }
+
+  if (want.startsWith("heuristic:")) {
+    const slug = want.slice("heuristic:".length);
+    setTab("heuristics");
+    if (listMode !== "heuristics") await loadHeuristics();
+    await openHeuristic(slug, $(`.row[data-heuristic="${CSS.escape(slug)}"]`));
     return;
   }
 

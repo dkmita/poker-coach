@@ -112,6 +112,79 @@ def hand_vs_hand(hero: str, villain: str, board: str = "", *, seed: int = 0) -> 
     return Equity(equity=(wins + ties / 2) / count, runouts=count, exact=exact)
 
 
+def combos(hand_class: str, dead: set[str]) -> list[str]:
+    """Every concrete two-card combination of a class, minus blocked cards.
+
+    "AA" is six, "AKs" four, "AKo" twelve -- before removing anything already on
+    the board or in the asking player's hand. Blockers are not a rounding error:
+    holding one ace takes half the AA combos out of an opponent's range.
+    """
+    hi, lo = hand_class[0], hand_class[1]
+    suited = hand_class[2:] == "s"
+    out = []
+    if hi == lo:
+        for i, a in enumerate(SUITS):
+            for b in SUITS[i + 1 :]:
+                out.append(hi + a + lo + b)
+    else:
+        for a in SUITS:
+            for b in SUITS:
+                if (a == b) != suited:
+                    continue
+                out.append(hi + a + lo + b)
+    return [c for c in out if c[:2] not in dead and c[2:] not in dead]
+
+
+def hand_vs_range(
+    hero: str,
+    weights: dict[str, float],
+    board: str = "",
+    *,
+    seed: int = 0,
+    samples: int = _SAMPLES,
+) -> Equity:
+    """Equity of one hand against a weighted range of hands.
+
+    Sampled, always: even on the river a 169-class range is hundreds of combos,
+    and preflop the runouts multiply on top. Seeded locally for reproducibility.
+
+    The range is what turns raw equity into something worth reporting. Against
+    the hand somebody actually showed the number is hindsight; against the range
+    that takes this line it is a statement about the decision.
+
+    Blockers are applied per class rather than to the range as a whole -- hero's
+    own cards remove combos, and which combos they remove depends on the class.
+    """
+    dead = set(_cards(hero)) | set(_cards(board))
+    pool: list[str] = []
+    pool_w: list[float] = []
+    for klass, w in weights.items():
+        if w <= 0:
+            continue
+        for combo in combos(klass, dead):
+            pool.append(combo)
+            pool_w.append(w)
+    if not pool:
+        raise ValueError("the range is empty once blockers are removed")
+
+    rest_base = [c for c in DECK if c not in dead]
+    need = 5 - len(board) // 2
+    rng = random.Random(seed)
+    wins = ties = 0
+    for _ in range(samples):
+        villain = rng.choices(pool, weights=pool_w, k=1)[0]
+        vc = {villain[:2], villain[2:]}
+        rest = [c for c in rest_base if c not in vc]
+        full = board + "".join(rng.sample(rest, need)) if need else board
+        h = StandardHighHand.from_game(hero, full)
+        v = StandardHighHand.from_game(villain, full)
+        if h > v:
+            wins += 1
+        elif h == v:
+            ties += 1
+    return Equity(equity=(wins + ties / 2) / samples, runouts=samples, exact=False)
+
+
 def price_call(pot: float, call: float, equity: float) -> dict[str, float]:
     """What calling is worth, and what equity it needed to break even.
 
