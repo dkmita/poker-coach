@@ -43,8 +43,8 @@ def no_ambient_credentials(monkeypatch, tmp_path):
 def test_the_default_model_answers_nothing_and_costs_nothing():
     """No credentials configured must be a degraded run, not a broken one."""
     assert NullLLM().complete(system="s", prompt="p") is None
-    est = RangeEstimator()
-    assert est.estimate("BTN_preflop_unopened_100bb", "anything") is None
+    pair = RangeEstimator().estimate("BTN_preflop_unopened_100bb", "anything")
+    assert pair.gto is None and pair.exploit is None and pair.best is None
 
 
 def test_a_missing_key_is_a_none_not_an_exception(monkeypatch):
@@ -53,8 +53,8 @@ def test_a_missing_key_is_a_none_not_an_exception(monkeypatch):
 
 
 def test_an_estimate_parses_into_the_same_shape_a_chart_has():
-    est = RangeEstimator(llm=StubLLM(["AA:1.0, KK:1.0, AKs:0.75, 77+"]))
-    r = est.estimate("BTN_preflop_unopened_100bb", "BTN opens 2.5bb")
+    est = RangeEstimator(llm=StubLLM(["AA:1.0, KK:1.0, AKs:0.75, 77+", "AA"]))
+    r = est.estimate("BTN_preflop_unopened_100bb", "BTN opens 2.5bb").gto
     assert r is not None
     assert r.weights["AKs"] == 0.75
     assert r.weights["AA"] == 1.0
@@ -64,14 +64,47 @@ def test_an_estimate_parses_into_the_same_shape_a_chart_has():
 def test_a_fenced_or_chatty_answer_still_parses():
     """Models wrap the answer despite being told not to. Being lenient here is
     free; being lenient in `parse_range` would let a chart typo through."""
-    est = RangeEstimator(llm=StubLLM(["Here is the range:\n```\nAA, KK\n```"]))
-    r = est.estimate("s", "d")
+    est = RangeEstimator(llm=StubLLM(["Here is the range:\n```\nAA, KK\n```", "AA"]))
+    r = est.estimate("s", "d").gto
     assert r is not None and set(r.weights) == {"AA", "KK"}
 
 
 def test_an_unparseable_answer_is_a_miss_not_a_crash():
     est = RangeEstimator(llm=StubLLM(["I think they have a strong hand."]))
-    assert est.estimate("s", "d") is None
+    assert est.estimate("s", "d").gto is None
+
+
+def test_the_pool_pass_is_skipped_when_the_first_one_failed():
+    """It adjusts a baseline. With no baseline it would be a second unanchored
+    guess wearing the label of a read."""
+    llm = StubLLM(["not a range", "AA, KK"])
+    pair = RangeEstimator(llm=llm).estimate("s", "d")
+    assert pair.gto is None and pair.exploit is None
+    assert len(llm.calls) == 1
+
+
+def test_the_two_passes_get_different_instructions():
+    llm = StubLLM(["AA", "AA, KK"])
+    est = RangeEstimator(llm=llm)
+    est.estimate("s", "d")
+    first, second = llm.calls
+    assert "You estimate poker hand ranges" in first["system"]
+    assert "adjusting a range you already estimated" in second["system"]
+    # The second is handed the first's answer, so it describes a deviation.
+    assert "AA" in second["prompt"] and "equilibrium estimate" in second["prompt"]
+
+
+def test_an_unchanged_pool_range_is_a_real_answer():
+    """Zero drift means the pool plays it the way theory does. That is a
+    finding, not a failure, and must not read as one."""
+    pair = RangeEstimator(llm=StubLLM(["AA, KK", "AA, KK"])).estimate("s", "d")
+    assert pair.exploit is not None
+    assert pair.drift() == 0.0
+
+
+def test_drift_measures_combos_moved():
+    pair = RangeEstimator(llm=StubLLM(["AA", "AA:0.5"])).estimate("s", "d")
+    assert pair.drift() == pytest.approx(3.0)   # half of six combos
 
 
 def test_the_spot_is_asked_about_once():
@@ -81,24 +114,24 @@ def test_the_spot_is_asked_about_once():
     a = est.estimate("BB_preflop_vs_BTN_raise_100bb", "first")
     b = est.estimate("BB_preflop_vs_BTN_raise_100bb", "second")
     assert a is b
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == 2       # one spot, two passes
 
 
 def test_the_board_is_part_of_the_key():
     """Same spot key, different board, is a different question."""
-    llm = StubLLM(["AA", "KK"])
+    llm = StubLLM(["AA", "KK", "QQ", "JJ"])   # two spots, two passes each
     est = RangeEstimator(llm=llm)
     est.estimate("spot", "d", board="7s8s9s")
     est.estimate("spot", "d", board="2c2d2h")
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 4       # two spots, two passes each
 
 
 def test_a_failed_estimate_is_not_retried():
     """Otherwise a spot the model cannot answer is paid for on every hand."""
     llm = StubLLM([])
     est = RangeEstimator(llm=llm)
-    assert est.estimate("spot", "d") is None
-    assert est.estimate("spot", "d") is None
+    assert est.estimate("spot", "d").gto is None
+    assert est.estimate("spot", "d").gto is None
     assert len(llm.calls) == 1
 
 
@@ -120,7 +153,8 @@ def test_budget_accounting_uses_the_reported_usage():
 def test_the_system_prompt_is_stable_and_carries_the_heuristics(tmp_path):
     """It is the cache prefix. If it varies per hand nothing ever caches, and
     if the heuristics are missing from it the model is guessing unaided."""
-    (tmp_path / "01-x.md").write_text("# X\n\nfold more rivers\n")
+    (tmp_path / "gto").mkdir()
+    (tmp_path / "gto" / "01-x.md").write_text("# X\n\nfold more rivers\n")
     est = RangeEstimator(llm=StubLLM([]), heuristics=Heuristics(tmp_path))
     first = est.system_prompt()
     assert first == est.system_prompt()
@@ -283,7 +317,7 @@ def test_the_estimator_works_through_the_proxy(monkeypatch):
         "choices": [{"message": {"content": "AA:1.0, KK:0.5, AKs"}}], "usage": {},
     })
     est = RangeEstimator(llm=ProxyLLM(api_key="k"))
-    r = est.estimate("BTN_preflop_unopened_100bb", "BTN opens 2.5bb")
+    r = est.estimate("BTN_preflop_unopened_100bb", "BTN opens 2.5bb").gto
     assert r is not None and r.weights["KK"] == 0.5
 
 

@@ -168,8 +168,9 @@ def test_heuristics_are_ordered_by_filename_prefix(tmp_path):
     cannot be left to whatever the directory listing returns."""
     from poker_coach.heuristics import Heuristics
 
-    (tmp_path / "10-later.md").write_text("# Later\n\nsecond\n")
-    (tmp_path / "02-earlier.md").write_text("# Earlier\n\nfirst\n")
+    (tmp_path / "gto").mkdir()
+    (tmp_path / "gto" / "10-later.md").write_text("# Later\n\nsecond\n")
+    (tmp_path / "gto" / "02-earlier.md").write_text("# Earlier\n\nfirst\n")
     h = Heuristics(tmp_path)
     assert [x.slug for x in h.all()] == ["earlier", "later"]
     assert [x.title for x in h.all()] == ["Earlier", "Later"]
@@ -180,7 +181,8 @@ def test_heuristics_are_ordered_by_filename_prefix(tmp_path):
 def test_a_file_without_a_heading_still_lists(tmp_path):
     from poker_coach.heuristics import Heuristics
 
-    (tmp_path / "01-no-heading.md").write_text("just prose\n")
+    (tmp_path / "gto").mkdir()
+    (tmp_path / "gto" / "01-no-heading.md").write_text("just prose\n")
     assert Heuristics(tmp_path).all()[0].title == "no heading"
 
 
@@ -188,9 +190,10 @@ def test_files_not_matching_the_convention_are_ignored(tmp_path):
     """A stray README in the directory must not end up in the prompt."""
     from poker_coach.heuristics import Heuristics
 
-    (tmp_path / "01-real.md").write_text("# Real\n\nyes\n")
-    (tmp_path / "README.md").write_text("# Readme\n\nno\n")
-    (tmp_path / "notes.txt").write_text("no\n")
+    (tmp_path / "gto").mkdir()
+    (tmp_path / "gto" / "01-real.md").write_text("# Real\n\nyes\n")
+    (tmp_path / "gto" / "README.md").write_text("# Readme\n\nno\n")
+    (tmp_path / "gto" / "notes.txt").write_text("no\n")
     h = Heuristics(tmp_path)
     assert [x.slug for x in h.all()] == ["real"]
     assert "Readme" not in h.prompt()
@@ -199,7 +202,8 @@ def test_files_not_matching_the_convention_are_ignored(tmp_path):
 def test_writing_reads_back_and_an_unknown_slug_raises(tmp_path):
     from poker_coach.heuristics import Heuristics
 
-    (tmp_path / "01-thing.md").write_text("# Thing\n\nbefore\n")
+    (tmp_path / "gto").mkdir()
+    (tmp_path / "gto" / "01-thing.md").write_text("# Thing\n\nbefore\n")
     h = Heuristics(tmp_path)
     h.write("thing", "# Thing\n\nafter\n")
     assert h.get("thing").body == "# Thing\n\nafter\n"
@@ -212,8 +216,37 @@ def test_the_prompt_is_byte_stable_across_calls(tmp_path):
     trailing whitespace -- costs a cache miss on every hand in the run."""
     from poker_coach.heuristics import Heuristics
 
-    (tmp_path / "01-a.md").write_text("# A\n\none\n\n\n")
-    (tmp_path / "02-b.md").write_text("# B\n\ntwo\n")
+    (tmp_path / "gto").mkdir()
+    (tmp_path / "gto" / "01-a.md").write_text("# A\n\none\n\n\n")
+    (tmp_path / "gto" / "02-b.md").write_text("# B\n\ntwo\n")
     h = Heuristics(tmp_path)
     assert h.prompt() == h.prompt()
     assert not h.prompt().endswith("\n")
+
+
+def test_groups_order_shared_then_gto_then_exploit(tmp_path):
+    """Prompt order, general to specific. An unknown directory sorts after them
+    rather than vanishing."""
+    from poker_coach.heuristics import Heuristics
+
+    for group in ("exploit", "gto", "shared", "zzz"):
+        (tmp_path / group).mkdir()
+        (tmp_path / group / "01-x.md").write_text(f"# {group}\n\n{group} body\n")
+    assert [h.group for h in Heuristics(tmp_path).all()] == [
+        "shared", "gto", "exploit", "zzz"
+    ]
+
+
+def test_a_prompt_can_select_groups(tmp_path):
+    """The equilibrium pass must not see the population notes -- that is what
+    makes its answer a claim about theory rather than a blend of both."""
+    from poker_coach.heuristics import EXPLOIT_GROUPS, GTO_GROUPS, Heuristics
+
+    for group, text in (("shared", "how"), ("gto", "theory"), ("exploit", "pool")):
+        (tmp_path / group).mkdir()
+        (tmp_path / group / "01-x.md").write_text(f"# {group}\n\n{text}\n")
+    h = Heuristics(tmp_path)
+    gto = h.prompt(*GTO_GROUPS)
+    assert "how" in gto and "theory" in gto and "pool" not in gto
+    assert "pool" in h.prompt(*EXPLOIT_GROUPS)
+    assert "pool" in h.prompt()          # no groups means everything

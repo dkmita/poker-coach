@@ -306,7 +306,8 @@ def make_handler(archive: Archive, heuristics: Heuristics):
             if url.path == "/api/heuristics":
                 self._json({
                     "items": [
-                        {"slug": h.slug, "title": h.title, "order": h.order}
+                        {"slug": h.slug, "title": h.title, "order": h.order,
+                         "group": h.group}
                         for h in heuristics.all()
                     ]
                 })
@@ -318,7 +319,10 @@ def make_handler(archive: Archive, heuristics: Heuristics):
                 if item is None:
                     self._json({"error": "no such heuristic"}, 404)
                     return
-                self._json({"slug": item.slug, "title": item.title, "body": item.body})
+                self._json({
+                    "slug": item.slug, "title": item.title,
+                    "body": item.body, "group": item.group,
+                })
                 return
 
             if url.path == "/api/charts":

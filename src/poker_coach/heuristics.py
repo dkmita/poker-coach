@@ -4,9 +4,21 @@ Files on disk, not string literals, for the same reason ranges are: they are
 edited far more often than the code around them, they want a diff when they
 change, and the thing that reads them should not need redeploying.
 
-Each file is one topic. Order is fixed by a numeric filename prefix rather than
-by directory listing, because these are assembled into a prompt and the order is
-part of the prompt.
+One directory per **group**, one file per topic inside it. Order is fixed by a
+numeric filename prefix rather than by directory listing, because these are
+assembled into a prompt and the order is part of the prompt.
+
+    heuristics/
+      shared/    how to answer at all -- both passes get this
+      gto/       what equilibrium does
+      exploit/   what this pool does instead
+
+The split is the point, not filing. A range estimated from equilibrium and a
+range estimated from population tendencies are different claims, and mixing the
+two sources into one prompt produces something that is neither -- you cannot
+tell afterwards which part of the answer came from theory and which from a read.
+Estimated separately, the *difference* between them is the exploit, and it is
+inspectable.
 
 They are a **prompt prefix**, which has two consequences worth stating:
 
@@ -31,6 +43,15 @@ from pathlib import Path
 # `01-name.md` -- the number orders the prompt, the name is what the UI shows.
 _FILENAME = re.compile(r"^(?P<order>\d+)-(?P<slug>[a-z0-9-]+)\.md$")
 
+# Both passes get `shared`. The equilibrium pass gets `gto`; the exploitative
+# pass gets everything, because it is adjusting a baseline rather than starting
+# over, and needs to know what it is adjusting away from.
+SHARED = "shared"
+GTO = "gto"
+EXPLOIT = "exploit"
+GTO_GROUPS = (SHARED, GTO)
+EXPLOIT_GROUPS = (SHARED, GTO, EXPLOIT)
+
 
 @dataclass(frozen=True, slots=True)
 class Heuristic:
@@ -38,6 +59,7 @@ class Heuristic:
     title: str
     order: int
     body: str
+    group: str
 
 
 class Heuristics:
@@ -51,17 +73,23 @@ class Heuristics:
         self.root = Path(root)
 
     def _path(self, slug: str) -> Path | None:
-        for p in self.root.glob("*.md"):
+        for p in self.root.glob("*/*.md"):
             m = _FILENAME.match(p.name)
             if m and m["slug"] == slug:
                 return p
         return None
 
     def all(self) -> list[Heuristic]:
+        """Every heuristic, ordered by group then by filename prefix.
+
+        Groups are ordered `shared`, `gto`, `exploit` -- prompt order, which
+        runs general to specific -- and anything else alphabetically after them,
+        so a new directory appears rather than silently disappearing.
+        """
         out: list[Heuristic] = []
         if not self.root.is_dir():
             return out
-        for p in sorted(self.root.glob("*.md")):
+        for p in sorted(self.root.glob("*/*.md")):
             m = _FILENAME.match(p.name)
             if not m:
                 continue
@@ -73,9 +101,18 @@ class Heuristics:
                 m["slug"].replace("-", " "),
             )
             out.append(
-                Heuristic(slug=m["slug"], title=head, order=int(m["order"]), body=body)
+                Heuristic(
+                    slug=m["slug"],
+                    title=head,
+                    order=int(m["order"]),
+                    body=body,
+                    group=p.parent.name,
+                )
             )
-        return sorted(out, key=lambda h: (h.order, h.slug))
+        order = {SHARED: 0, GTO: 1, EXPLOIT: 2}
+        return sorted(
+            out, key=lambda h: (order.get(h.group, 9), h.group, h.order, h.slug)
+        )
 
     def get(self, slug: str) -> Heuristic | None:
         return next((h for h in self.all() if h.slug == slug), None)
@@ -86,10 +123,15 @@ class Heuristics:
             raise KeyError(slug)
         path.write_text(body)
 
-    def prompt(self) -> str:
-        """Everything, in order, as one block for the model's system prompt.
+    def prompt(self, *groups: str) -> str:
+        """The named groups, in order, as one block for a system prompt.
 
-        Byte-stable for a given set of files -- see the module docstring on why
-        that matters.
+        No groups means all of them. Byte-stable for a given set of files -- see
+        the module docstring on why that matters.
         """
-        return "\n\n".join(h.body.rstrip() for h in self.all())
+        wanted = set(groups) if groups else None
+        return "\n\n".join(
+            h.body.rstrip()
+            for h in self.all()
+            if wanted is None or h.group in wanted
+        )

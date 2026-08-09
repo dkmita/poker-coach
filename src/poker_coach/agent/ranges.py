@@ -19,11 +19,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..heuristics import Heuristics
+from ..heuristics import EXPLOIT_GROUPS, GTO_GROUPS, Heuristics
 from ..llm import DEFAULT_MAX_TOKENS, LLM, Budget, NullLLM
 from ..solvers.ranges import parse_range
 
-_PROMPT = Path(__file__).with_name("prompts") / "estimate_range.md"
+_PROMPTS = Path(__file__).with_name("prompts")
+_ESTIMATE = _PROMPTS / "estimate_range.md"
+_ADJUST = _PROMPTS / "adjust_range.md"
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +34,46 @@ class EstimatedRange:
     spot_key: str
     model: str
     raw: str
+    basis: str = "gto"
+
+
+@dataclass(frozen=True, slots=True)
+class RangePair:
+    """What equilibrium does here, and what this pool does instead.
+
+    Two estimates rather than one blended answer. Mixed into a single prompt you
+    cannot tell afterwards which part came from theory and which from a read;
+    kept apart, the difference between them *is* the exploit and can be looked
+    at.
+
+    Either side may be None -- the pool pass is skipped when the equilibrium one
+    failed, since it has nothing to adjust.
+    """
+
+    gto: EstimatedRange | None = None
+    exploit: EstimatedRange | None = None
+
+    @property
+    def best(self) -> EstimatedRange | None:
+        """The one to price against: the read if there is one, else theory."""
+        return self.exploit or self.gto
+
+    def drift(self) -> float:
+        """Total absolute weight moved between the two, in combos.
+
+        Zero means the pool pass returned the equilibrium range unchanged, which
+        is a real answer and not a failure.
+        """
+        if not (self.gto and self.exploit):
+            return 0.0
+        from ..equity import combos
+
+        keys = set(self.gto.weights) | set(self.exploit.weights)
+        return sum(
+            abs(self.exploit.weights.get(k, 0.0) - self.gto.weights.get(k, 0.0))
+            * len(combos(k, set()))
+            for k in keys
+        )
 
 
 @dataclass
@@ -46,56 +88,97 @@ class RangeEstimator:
     llm: LLM = field(default_factory=NullLLM)
     heuristics: Heuristics | None = None
     budget: Budget = field(default_factory=Budget)
-    _cache: dict[str, EstimatedRange | None] = field(default_factory=dict, repr=False)
+    _cache: dict[str, RangePair] = field(default_factory=dict, repr=False)
 
-    def system_prompt(self) -> str:
+    def system_prompt(self, basis: str = "gto") -> str:
         """Task description then heuristics, in that order, and nothing else.
 
         Byte-stable across hands so the provider can cache it. Nothing about a
         specific hand may appear here -- that is what the user turn is for.
+
+        The two passes get different prefixes, so they cache separately: the
+        equilibrium pass never sees the population notes, which is what makes
+        its answer a statement about theory rather than a blend.
         """
-        parts = [_PROMPT.read_text().rstrip()]
+        if basis == "exploit":
+            parts = [_ADJUST.read_text().rstrip()]
+            groups = EXPLOIT_GROUPS
+        else:
+            parts = [_ESTIMATE.read_text().rstrip()]
+            groups = GTO_GROUPS
         if self.heuristics is not None:
-            body = self.heuristics.prompt().strip()
+            body = self.heuristics.prompt(*groups).strip()
             if body:
                 parts.append("# Standing guidance\n\n" + body)
         return "\n\n".join(parts)
 
-    def estimate(self, spot_key: str, description: str, board: str = "") -> EstimatedRange | None:
-        """A range for one decision, or None if unavailable.
+    def _one(self, spot_key: str, prompt: str, basis: str) -> EstimatedRange | None:
+        """A single pass. None for every reason a pass can fail."""
+        if self.budget.exhausted():
+            return None
+        reply = self.llm.complete(
+            system=self.system_prompt(basis),
+            prompt=prompt,
+            max_tokens=DEFAULT_MAX_TOKENS,
+        )
+        if reply is None:
+            return None
+        self.budget.requests += 1
+        # A malformed range is a miss, not a crash. The model is asked for a
+        # strict format precisely so this stays detectable.
+        for candidate in _candidates(reply.text):
+            try:
+                weights = parse_range(candidate)
+            except ValueError:
+                continue
+            if weights:
+                return EstimatedRange(
+                    weights=weights,
+                    spot_key=spot_key,
+                    model=reply.model,
+                    raw=reply.text,
+                    basis=basis,
+                )
+        return None
 
-        None covers every reason: no model configured, no key, the budget is
-        spent, the call failed, the answer did not parse. Callers treat all of
-        them the same way, which is to carry on without an estimate.
+    def estimate(self, spot_key: str, description: str, board: str = "") -> RangePair:
+        """Both ranges for one decision: equilibrium first, then the pool.
+
+        Two calls. The second is given the first as its starting point, so it
+        describes a deviation rather than answering afresh -- which makes the
+        two comparable, and makes "no change" an answer the model can give.
+
+        The pool pass is skipped when the equilibrium one failed: there is
+        nothing to adjust, and asking anyway would produce a second unanchored
+        guess rather than a read.
         """
         key = f"{spot_key}|{board}"
         if key in self._cache:
             return self._cache[key]
-        if self.budget.exhausted():
-            return None
 
-        reply = self.llm.complete(
-            system=self.system_prompt(), prompt=description, max_tokens=DEFAULT_MAX_TOKENS
-        )
-        result: EstimatedRange | None = None
-        if reply is not None:
-            self.budget.requests += 1
-            # A malformed range is a miss, not a crash. The model is asked for
-            # a strict format precisely so this stays detectable.
-            weights = {}
-            for candidate in _candidates(reply.text):
-                try:
-                    weights = parse_range(candidate)
-                except ValueError:
-                    continue
-                if weights:
-                    break
-            if weights:
-                result = EstimatedRange(
-                    weights=weights, spot_key=spot_key, model=reply.model, raw=reply.text
-                )
-        self._cache[key] = result
-        return result
+        gto = self._one(spot_key, description, "gto")
+        exploit = None
+        if gto is not None:
+            exploit = self._one(
+                spot_key,
+                f"{description}\n\n"
+                f"Your equilibrium estimate for this spot was:\n{_as_text(gto.weights)}",
+                "exploit",
+            )
+        pair = RangePair(gto=gto, exploit=exploit)
+        self._cache[key] = pair
+        return pair
+
+
+def _as_text(weights: dict[str, float]) -> str:
+    """A weight map back into the range text the model was asked to produce.
+
+    Round-tripping through its own format keeps the second prompt in the
+    vocabulary the first answered in.
+    """
+    return ", ".join(
+        k if w >= 1.0 else f"{k}:{w:g}" for k, w in sorted(weights.items())
+    )
 
 
 def _candidates(text: str) -> list[str]:

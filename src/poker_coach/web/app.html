@@ -794,7 +794,22 @@ async function loadHeuristics() {
     $("#rows").innerHTML = `<div class="row"><div class="meta">None found.</div></div>`;
     return;
   }
+  // Sectioned by group, because which group a heuristic is in decides which
+  // pass sees it -- that is the whole structure, not a filing convention.
+  const LABEL = {
+    shared: "Both passes",
+    gto: "Equilibrium — pass 1",
+    exploit: "This pool — pass 2",
+  };
+  let group = null;
   for (const h of r.items) {
+    if (h.group !== group) {
+      group = h.group;
+      const head = document.createElement("div");
+      head.className = "group";
+      head.textContent = LABEL[group] || group;
+      $("#rows").appendChild(head);
+    }
     const el = document.createElement("div");
     el.className = "row";
     el.dataset.heuristic = h.slug;
@@ -813,7 +828,10 @@ async function openHeuristic(slug, el) {
   if (h.error) { $("#detail").innerHTML = `<div class="empty">${h.error}</div>`; return; }
   $("#detail").innerHTML = `
     <h2>${esc(h.title)}</h2>
-    <div class="sub">heuristics/${esc(slug)}.md — given to the model as standing context</div>
+    <div class="sub">heuristics/${esc(h.group)}/${esc(slug)}.md — ${
+      {shared: "given to both passes",
+       gto: "given to the equilibrium pass only",
+       exploit: "given to the pool pass only"}[h.group] || "standing context"}</div>
     <textarea class="notes" id="hbody" spellcheck="false">${esc(h.body)}</textarea>
     <div class="saverow"><button class="btn" id="hsave">Save</button>
       <span class="saved" id="hsaved"></span></div>`;
