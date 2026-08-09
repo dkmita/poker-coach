@@ -16,6 +16,30 @@ from poker_coach.heuristics import Heuristics
 from poker_coach.llm import AnthropicLLM, Budget, NullLLM, Reply, StubLLM
 
 
+@pytest.fixture(autouse=True)
+def no_ambient_credentials(monkeypatch, tmp_path):
+    """Cut every route a key can arrive by, for every test in this file.
+
+    Not optional and not per-test: `ProxyLLM` reads a *relative* path, so the
+    behaviour of a test depended on whether the working directory happened to
+    contain `.llm.properties`. It did not, until a real key was put there, and
+    then a test asserting "no key means no call" started making calls. Tests
+    that want a credential pass one explicitly.
+    """
+    from poker_coach import llm as llm_mod
+
+    monkeypatch.setattr(llm_mod, "PROXY_VAULT_PROPS", tmp_path / "no-vault")
+    monkeypatch.setattr(llm_mod, "PROXY_LOCAL_PROPS", tmp_path / "no-local")
+    for var in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "LLM_PROXY_API_KEY",
+        "LLM_PROXY_URL",
+        "VITE_INDEED_LLM_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 def test_the_default_model_answers_nothing_and_costs_nothing():
     """No credentials configured must be a degraded run, not a broken one."""
     assert NullLLM().complete(system="s", prompt="p") is None
@@ -207,12 +231,8 @@ def test_the_proxy_key_never_appears_in_the_reply(monkeypatch):
 
 
 def test_no_key_means_no_call(monkeypatch, tmp_path):
-    from poker_coach import llm as llm_mod
     from poker_coach.llm import ProxyLLM
 
-    monkeypatch.delenv("LLM_PROXY_API_KEY", raising=False)
-    monkeypatch.delenv("VITE_INDEED_LLM_API_KEY", raising=False)
-    monkeypatch.setattr(llm_mod, "PROXY_VAULT_PROPS", tmp_path / "absent.properties")
     called = []
     monkeypatch.setattr(
         __import__("urllib.request", fromlist=["x"]),
