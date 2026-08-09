@@ -273,3 +273,18 @@ def test_no_client_prints_its_key():
 
     assert "hunter2" not in repr(ProxyLLM(api_key="hunter2"))
     assert "hunter2" not in repr(AnthropicLLM(api_key="hunter2"))
+
+
+def test_a_local_properties_file_supplies_the_key(monkeypatch, tmp_path):
+    """So the key can live in a gitignored file rather than in the environment
+    or, worse, in a chat transcript."""
+    from poker_coach import llm as llm_mod
+    from poker_coach.llm import PROXY_VAULT_KEY, ProxyLLM
+
+    local = tmp_path / ".llm.properties"
+    local.write_text(f"{PROXY_VAULT_KEY}=from-local-file\n")
+    monkeypatch.setattr(llm_mod, "PROXY_VAULT_PROPS", tmp_path / "absent")
+    monkeypatch.setattr(llm_mod, "PROXY_LOCAL_PROPS", local)
+    monkeypatch.delenv("LLM_PROXY_API_KEY", raising=False)
+    monkeypatch.delenv("VITE_INDEED_LLM_API_KEY", raising=False)
+    assert ProxyLLM()._key() == "from-local-file"

@@ -389,11 +389,17 @@ resolution order: the Vault-rendered properties file first, then `LLM_PROXY_API_
 It talks stdlib HTTP rather than pulling in `openai` — one POST of JSON to one endpoint, the same
 reasoning that keeps the web server on `http.server`.
 
-To run against it:
+To run against it, write the key into a gitignored file in the working directory:
 
-```bash
-export LLM_PROXY_API_KEY=...          # never committed; see .gitignore
 ```
+# .llm.properties  -- matched by *.properties in .gitignore
+dominik-personal-llm-proxy.api-key=...
+```
+
+Preferred over `export LLM_PROXY_API_KEY=...`, which both still work: an
+environment variable is visible to every process the shell starts and turns up in a stray `env`,
+where a file is read only by the thing that needs it. **Never paste a key into a chat transcript** —
+those are written to disk and sent to a model provider, and a key that has been in one is burned.
 
 **Keys.** `api_key` is `repr=False` on both clients, because a dataclass prints every field it has
 and these end up in tracebacks. Gateway errors are swallowed rather than logged, since the response

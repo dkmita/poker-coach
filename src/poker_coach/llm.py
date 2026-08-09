@@ -219,6 +219,11 @@ PROXY_VAULT_PROPS = Path(
     "/var/local/product_groups/advanced-sourcing/product_group_auto.properties"
 )
 PROXY_VAULT_KEY = "dominik-personal-llm-proxy.api-key"
+# Same format, in the working directory, for running on a laptop. Gitignored via
+# `*.properties`. Preferred over an environment variable because a key in the
+# environment is visible to everything the shell starts and shows up in a stray
+# `env` -- a file is read by the one thing that needs it.
+PROXY_LOCAL_PROPS = Path(".llm.properties")
 
 
 def _vault_props(path: Path | None = None) -> dict[str, str]:
@@ -271,9 +276,16 @@ class ProxyLLM:
     name: str = field(init=False, default="indeed-proxy")
 
     def _key(self) -> str | None:
+        """The key, from the first place that has one.
+
+        Vault when deployed, then a local properties file, then the
+        environment. Never returned to a caller, never logged, never put in a
+        `Reply` -- the only thing that reads this is the request builder.
+        """
         return (
             self.api_key
             or _vault_props().get(PROXY_VAULT_KEY)
+            or _vault_props(PROXY_LOCAL_PROPS).get(PROXY_VAULT_KEY)
             or os.environ.get("LLM_PROXY_API_KEY")
             or os.environ.get("VITE_INDEED_LLM_API_KEY")
         )
