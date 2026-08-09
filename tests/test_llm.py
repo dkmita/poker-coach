@@ -69,18 +69,28 @@ def test_a_fenced_or_chatty_answer_still_parses():
     assert r is not None and set(r.weights) == {"AA", "KK"}
 
 
-def test_an_unparseable_answer_is_a_miss_not_a_crash():
-    est = RangeEstimator(llm=StubLLM(["I think they have a strong hand."]))
-    assert est.estimate("s", "d").gto is None
+def test_an_unparseable_answer_is_retried_once_then_missed():
+    """A few percent of answers arrive as prose at any temperature above zero,
+    and the identical prompt usually works second time -- ten of thirty-one
+    spots missed this way before the retry existed."""
+    recovers = StubLLM(["I think they have a strong hand.", "AA, KK", "AA"])
+    assert RangeEstimator(llm=recovers).estimate("s", "d").gto is not None
+    # Prose, retry, then the pool pass on top.
+    assert len(recovers.calls) == 3
+
+    never = StubLLM(["prose", "more prose"])
+    assert RangeEstimator(llm=never).estimate("s", "d").gto is None
+    assert len(never.calls) == 2
 
 
 def test_the_pool_pass_is_skipped_when_the_first_one_failed():
     """It adjusts a baseline. With no baseline it would be a second unanchored
     guess wearing the label of a read."""
-    llm = StubLLM(["not a range", "AA, KK"])
+    # Two bad answers, because a single one is retried.
+    llm = StubLLM(["not a range", "still not a range", "AA, KK"])
     pair = RangeEstimator(llm=llm).estimate("s", "d")
     assert pair.gto is None and pair.exploit is None
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == 2
 
 
 def test_the_two_passes_get_different_instructions():

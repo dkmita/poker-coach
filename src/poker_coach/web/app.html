@@ -126,6 +126,14 @@
      the browser's `title`: that waits about a second, renders at caption size,
      and wraps a sentence badly -- and when it silently does not appear there is
      nothing to inspect. This shows immediately and is a real element. */
+  /* Opens the model's range for this decision. Dashed, because unlike a chart
+     verdict this is an estimate and the border should not claim otherwise. */
+  .rangebtn {
+    background: none; border: 1px dashed var(--line); border-radius: 6px;
+    color: var(--hero); cursor: pointer; padding: 5px 10px; font: inherit;
+    font-size: 11px; font-weight: 650;
+  }
+  .rangebtn:hover { border-style: solid; border-color: var(--hero); }
   .hint { position: relative; }
   /* An explicit control rather than a hover target: hovering is undiscoverable
      and, left to the browser, slow. */
@@ -571,7 +579,13 @@ function decisionFacts(d) {
     : bb(d.pot_before_bb)]);
   if (d.spr !== null) f.push(["SPR", d.spr]);
   if (d.stack_before_bb !== null) f.push(["stack", bb(d.stack_before_bb)]);
-  return f.map(([k, v, work]) => work
+  const buttons = d.ranges
+    ? Object.keys(d.ranges).sort().map(kind =>
+        `<button class="rangebtn" type="button" data-kind="${kind}"
+          data-action-index="${d.action_index}">${
+          kind === "hero" ? "your range" : "their range"}</button>`).join("")
+    : "";
+  return buttons + f.map(([k, v, work]) => work
     ? `<div class="fact hint" data-tip="${esc(work)}"><b>${k}</b><span>${v}</span>` +
       `<button class="info" type="button" aria-label="How this is worked out">i</button></div>`
     : `<div class="fact"><b>${k}</b><span>${v}</span></div>`).join("");
@@ -635,8 +649,11 @@ function renderOutcome(v) {
         ${board(sd.board)}</header>${rows}</div>`;
 }
 
+let currentView = null;
+
 function render(v) {
   if (v.error) { $("#detail").innerHTML = `<div class="empty">${v.error}</div>`; return; }
+  currentView = v;
   const h = v.hand;
   const byIndex = new Map(v.hero_decisions.map(d => [d.action_index, d]));
   // Everything else on this page is derived; this is what the site actually
@@ -747,6 +764,41 @@ function rangeGrid(c, highlight) {
   return `<div class="rangegrid">${cellsHtml}</div>
     <div class="legend">${[...seen].map(a =>
       `<span><b style="background:${ACTION_COLOUR[a] || "#888"}"></b>${a}</span>`).join("")}</div>`;
+}
+
+function weightGrid(weights, label) {
+  const cells = RANKS13.flatMap((hi, i) =>
+    RANKS13.map((lo, j) => {
+      const k = i === j ? hi + lo : (j > i ? hi + lo + "s" : lo + hi + "o");
+      const w = weights[k] || 0;
+      // Opacity carries the weight, so a half-weighted class reads as half in
+      // rather than as a different colour with its own meaning.
+      const bg = w > 0
+        ? `background:rgba(110,168,254,${(0.18 + 0.82 * w).toFixed(2)});color:#0d1117`
+        : "";
+      return `<div class="rc${k.length === 2 ? " pair" : ""}" data-hand="${k}"
+        style="${bg}" title="${k}${w ? ` — ${(w * 100).toFixed(0)}%` : " — not in range"}"
+        ><span>${k}</span></div>`;
+    })
+  ).join("");
+  const combos = Object.entries(weights).reduce((n, [k, w]) =>
+    n + w * (k.length === 2 ? 6 : k.endsWith("s") ? 4 : 12), 0);
+  return `<div class="sub" style="margin:0 0 8px">${label} — ${
+    Object.keys(weights).length} classes, ${combos.toFixed(0)} combos, ${
+    (100 * combos / 1326).toFixed(1)}% of hands</div>
+    <div class="rangegrid">${cells}</div>`;
+}
+
+// A model-estimated range, shown in the same modal a chart uses.
+function showRange(d, kind) {
+  const r = d.ranges[kind];
+  const who = kind === "hero" ? "Your range" : "Their range";
+  $("#sheettitle").innerHTML = `${who}<small>${
+    d.spot_key.replace(/_/g, " ")} — estimated by ${esc(r.model || "model")}, not a chart</small>`;
+  $("#sheetbody").innerHTML = weightGrid(r.gto, "Equilibrium");
+  lastFocus = document.activeElement;
+  $("#overlay").hidden = false;
+  $(".sheetclose").focus();
 }
 
 async function openChart(spot, el, highlight) {
@@ -992,6 +1044,15 @@ function closeHints() {
 }
 
 document.addEventListener("click", (e) => {
+  const rangeBtn = e.target.closest(".rangebtn");
+  if (rangeBtn) {
+    const d = (currentView?.hero_decisions || []).find(
+      x => String(x.action_index) === rangeBtn.dataset.actionIndex);
+    if (d?.ranges) showRange(d, rangeBtn.dataset.kind);
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   const info = e.target.closest(".info");
   const hint = info && info.closest(".hint");
   const reopen = hint && !hint.classList.contains("open");

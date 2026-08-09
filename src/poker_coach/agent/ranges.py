@@ -113,35 +113,43 @@ class RangeEstimator:
         return "\n\n".join(parts)
 
     def _one(self, spot_key: str, prompt: str, basis: str) -> EstimatedRange | None:
-        """A single pass. None for every reason a pass can fail."""
-        if self.budget.exhausted():
-            return None
-        reply = self.llm.complete(
-            system=self.system_prompt(basis),
-            prompt=prompt,
-            max_tokens=DEFAULT_MAX_TOKENS,
-        )
-        if reply is None:
-            return None
-        self.budget.requests += 1
-        # A malformed range is a miss, not a crash. The model is asked for a
-        # strict format precisely so this stays detectable.
-        for candidate in _candidates(reply.text):
-            try:
-                weights = parse_range(candidate)
-            except ValueError:
-                continue
-            if weights:
-                return EstimatedRange(
-                    weights=weights,
-                    spot_key=spot_key,
-                    model=reply.model,
-                    raw=reply.text,
-                    basis=basis,
-                )
+        """A single pass, retried once if the answer does not parse.
+
+        Not a transport retry -- those already come back None. This is for the
+        answer arriving in prose or half a fence, which happens a few percent of
+        the time at any temperature above zero and succeeds on a second ask with
+        the identical prompt. Ten of thirty-one spots missed this way on the
+        first real run.
+        """
+        for attempt in range(2):
+            if self.budget.exhausted():
+                return None
+            reply = self.llm.complete(
+                system=self.system_prompt(basis),
+                prompt=prompt,
+                max_tokens=DEFAULT_MAX_TOKENS,
+            )
+            if reply is None:
+                return None      # transport, not format: asking again will not help
+            self.budget.requests += 1
+            for candidate in _candidates(reply.text):
+                try:
+                    weights = parse_range(candidate)
+                except ValueError:
+                    continue
+                if weights:
+                    return EstimatedRange(
+                        weights=weights,
+                        spot_key=spot_key,
+                        model=reply.model,
+                        raw=reply.text,
+                        basis=basis,
+                    )
         return None
 
-    def estimate(self, spot_key: str, description: str, board: str = "") -> RangePair:
+    def estimate(
+        self, spot_key: str, description: str, board: str = "", kind: str = "opponent"
+    ) -> RangePair:
         """Both ranges for one decision: equilibrium first, then the pool.
 
         Two calls. The second is given the first as its starting point, so it
@@ -152,7 +160,7 @@ class RangeEstimator:
         nothing to adjust, and asking anyway would produce a second unanchored
         guess rather than a read.
         """
-        key = f"{spot_key}|{board}"
+        key = f"{spot_key}|{board}|{kind}"
         if key in self._cache:
             return self._cache[key]
 

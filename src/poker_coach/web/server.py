@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, urlparse
 from .. import handview
 from ..replay import ReplayError, hero_index, load, project_index
 from ..solvers.base import NullProvider, SolutionProvider
+from ..agent.store import RangeStore
 from ..heuristics import Heuristics
 from ..solvers.ranges import ChartProvider
 
@@ -52,9 +53,12 @@ FILTERS = ("all", "flagged", "interesting", "terminal")
 class Archive:
     """The .phh files on disk, plus a memo of the views built from them."""
 
-    def __init__(self, root: Path, provider: SolutionProvider):
+    def __init__(
+        self, root: Path, provider: SolutionProvider, ranges: RangeStore | None = None
+    ):
         self.root = root
         self.provider = provider
+        self.ranges = ranges
         self.files: dict[str, Path] = {
             p.name: p for p in sorted(root.glob("*.phh"))
         }
@@ -126,7 +130,31 @@ class Archive:
             return {"error": str(exc), "file": name}
         view = handview.build(hh, provider=self.provider)
         view["file"] = name
+        self._attach_ranges(view)
         return view
+
+    def _attach_ranges(self, view: dict) -> None:
+        """Hang any stored model ranges on the decisions they belong to.
+
+        Done here rather than in `handview` so that module stays a pure
+        function of the .phh file: a range is model output, and the view is the
+        free tier. A decision with nothing stored simply has none.
+        """
+        if self.ranges is None:
+            return
+        for d in view["hero_decisions"]:
+            board = "".join(d["board"])
+            found = {}
+            for kind in ("hero", "opponent"):
+                entry = self.ranges.get(d["spot_key"], board, kind)
+                if entry:
+                    found[kind] = {
+                        "gto": entry.get("gto"),
+                        "exploit": entry.get("exploit"),
+                        "drift": entry.get("drift_combos"),
+                        "model": entry.get("model"),
+                    }
+            d["ranges"] = found or None
 
     def filtered(self, kind: str, tz_offset: int = 0) -> list[str]:
         """Files matching a review filter.
@@ -366,6 +394,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--archive", type=Path, default=Path("archive/synthetic"))
     ap.add_argument("--charts", type=Path, default=Path("charts"))
     ap.add_argument("--heuristics", type=Path, default=Path("heuristics"))
+    ap.add_argument("--ranges", type=Path, default=Path("ranges"))
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args(argv)
 
@@ -380,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         provider, charted = NullProvider(), 0
 
-    archive = Archive(args.archive, provider)
+    archive = Archive(args.archive, provider, RangeStore(args.ranges))
     if not archive.files:
         print(f"no .phh files in {args.archive}")
         return 1

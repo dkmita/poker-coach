@@ -26,3 +26,4 @@ charts/
 .env
 .env.*
 *.properties
+ranges/
