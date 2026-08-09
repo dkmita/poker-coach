@@ -274,6 +274,12 @@ class ProxyLLM:
     # prompt would mostly serve entries we would never ask for twice anyway.
     cache: bool = False
     name: str = field(init=False, default="indeed-proxy")
+    # Why the last call came back None. Recorded rather than raised: callers
+    # still get one uniform failure, but "no key", "gateway 500" and "answer did
+    # not parse" are different problems and collapsing them left nothing to
+    # debug with. Never contains the key; may contain a response body, so it is
+    # for a human reading it deliberately, not for logging.
+    last_error: str | None = field(init=False, default=None, repr=False)
 
     def _key(self) -> str | None:
         """The key, from the first place that has one.
@@ -297,8 +303,10 @@ class ProxyLLM:
     def complete(
         self, *, system: str, prompt: str, max_tokens: int = DEFAULT_MAX_TOKENS
     ) -> Reply | None:
+        self.last_error = None
         key = self._key()
         if not key:
+            self.last_error = "no key configured"
             return None
         body = json.dumps(
             {
@@ -327,14 +335,23 @@ class ProxyLLM:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 payload = json.loads(response.read())
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode()[:300]
+            except Exception:
+                pass
+            self.last_error = f"HTTP {exc.code}: {detail}"
+            return None
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             # One failure mode to the caller, as everywhere else on this
-            # boundary: no estimate. The error text can carry the prompt, so it
-            # is deliberately not propagated or logged.
+            # boundary: no estimate.
+            self.last_error = f"{type(exc).__name__}: {exc}"
             return None
         try:
             text = payload["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
+            self.last_error = f"unexpected response shape: {str(payload)[:300]}"
             return None
         usage = payload.get("usage") or {}
         details = usage.get("prompt_tokens_details") or {}
