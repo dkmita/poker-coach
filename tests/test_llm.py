@@ -7,6 +7,8 @@ test suite nobody runs.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from poker_coach.agent.ranges import RangeEstimator
@@ -145,3 +147,129 @@ def test_neither_key_nor_gateway_is_still_a_none(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     assert AnthropicLLM()._connect() is None
+
+
+# ---- Indeed's gateway -------------------------------------------------------
+# OpenAI-shaped, so a separate class rather than a base_url on the Anthropic
+# one. Exercised against a fake opener: no network, and no key required.
+
+def _fake_proxy(monkeypatch, payload, status=200, capture=None):
+    import urllib.request
+
+    class FakeResponse:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps(payload).encode()
+
+    def fake_urlopen(request, timeout=None):
+        if capture is not None:
+            capture["url"] = request.full_url
+            capture["headers"] = dict(request.headers)
+            capture["body"] = json.loads(request.data)
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+
+def test_the_proxy_sends_the_shape_the_gateway_expects(monkeypatch):
+    from poker_coach.llm import ProxyLLM
+
+    seen: dict = {}
+    _fake_proxy(monkeypatch, {
+        "model": "gpt-4.1-mini",
+        "choices": [{"message": {"content": "AA, KK"}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 5},
+    }, capture=seen)
+
+    r = ProxyLLM(api_key="secret").complete(system="sys", prompt="hand")
+    assert r is not None and r.text == "AA, KK"
+    assert r.input_tokens == 100 and r.output_tokens == 5
+
+    assert seen["url"].endswith("/openai/v1/chat/completions")
+    # Header names are normalised by urllib; compare case-insensitively.
+    headers = {k.lower(): v for k, v in seen["headers"].items()}
+    assert headers["authorization"] == "Bearer secret"
+    assert headers["x-indeed-cache"] == "false"
+    # System first, per-hand second: a prefix cache needs that ordering.
+    assert [m["role"] for m in seen["body"]["messages"]] == ["system", "user"]
+    assert seen["body"]["messages"][0]["content"] == "sys"
+
+
+def test_the_proxy_key_never_appears_in_the_reply(monkeypatch):
+    """A Reply gets logged and stored; a credential in it would follow."""
+    from poker_coach.llm import ProxyLLM
+
+    _fake_proxy(monkeypatch, {
+        "choices": [{"message": {"content": "AA"}}], "usage": {},
+    })
+    r = ProxyLLM(api_key="secret").complete(system="s", prompt="p")
+    assert "secret" not in repr(r)
+
+
+def test_no_key_means_no_call(monkeypatch, tmp_path):
+    from poker_coach import llm as llm_mod
+    from poker_coach.llm import ProxyLLM
+
+    monkeypatch.delenv("LLM_PROXY_API_KEY", raising=False)
+    monkeypatch.delenv("VITE_INDEED_LLM_API_KEY", raising=False)
+    monkeypatch.setattr(llm_mod, "PROXY_VAULT_PROPS", tmp_path / "absent.properties")
+    called = []
+    monkeypatch.setattr(
+        __import__("urllib.request", fromlist=["x"]),
+        "urlopen",
+        lambda *a, **k: called.append(1),
+    )
+    assert ProxyLLM().complete(system="s", prompt="p") is None
+    assert not called
+
+
+def test_the_key_comes_from_the_vault_file_when_it_exists(monkeypatch, tmp_path):
+    from poker_coach import llm as llm_mod
+    from poker_coach.llm import PROXY_VAULT_KEY, ProxyLLM
+
+    props = tmp_path / "p.properties"
+    props.write_text(f"# comment\n\n{PROXY_VAULT_KEY}=from-vault\nother=x\n")
+    monkeypatch.setattr(llm_mod, "PROXY_VAULT_PROPS", props)
+    monkeypatch.delenv("LLM_PROXY_API_KEY", raising=False)
+    assert ProxyLLM()._key() == "from-vault"
+
+
+def test_a_gateway_failure_is_a_none(monkeypatch):
+    """Including the body of the error, which can echo the prompt back."""
+    import urllib.error
+    import urllib.request
+
+    from poker_coach.llm import ProxyLLM
+
+    def boom(*a, **k):
+        raise urllib.error.HTTPError("u", 500, "nope", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    assert ProxyLLM(api_key="k").complete(system="s", prompt="p") is None
+
+
+def test_a_response_missing_the_answer_is_a_none(monkeypatch):
+    from poker_coach.llm import ProxyLLM
+
+    _fake_proxy(monkeypatch, {"error": "quota"})
+    assert ProxyLLM(api_key="k").complete(system="s", prompt="p") is None
+
+
+def test_the_estimator_works_through_the_proxy(monkeypatch):
+    """End to end: gateway reply -> parsed range -> same shape a chart has."""
+    from poker_coach.llm import ProxyLLM
+
+    _fake_proxy(monkeypatch, {
+        "choices": [{"message": {"content": "AA:1.0, KK:0.5, AKs"}}], "usage": {},
+    })
+    est = RangeEstimator(llm=ProxyLLM(api_key="k"))
+    r = est.estimate("BTN_preflop_unopened_100bb", "BTN opens 2.5bb")
+    assert r is not None and r.weights["KK"] == 0.5
+
+
+def test_no_client_prints_its_key():
+    """A dataclass repr prints every field, and these end up in tracebacks."""
+    from poker_coach.llm import AnthropicLLM, ProxyLLM
+
+    assert "hunter2" not in repr(ProxyLLM(api_key="hunter2"))
+    assert "hunter2" not in repr(AnthropicLLM(api_key="hunter2"))

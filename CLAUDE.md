@@ -376,13 +376,31 @@ unattended run over a session must not be able to cost an unbounded amount.
 
 ### Pointing at a gateway
 
-`AnthropicLLM` takes `base_url` and `headers` (or reads `ANTHROPIC_BASE_URL`), which is enough for
-any proxy that speaks the Anthropic wire format, including ones that authenticate by header rather
-than by `x-api-key`. A gateway speaking a different shape — an OpenAI-style `/chat/completions`, say
-— wants its own class implementing `LLM`, which is the reason that is a protocol.
+`AnthropicLLM` takes `base_url` and `headers` (or reads `ANTHROPIC_BASE_URL`), which covers any
+proxy speaking the Anthropic wire format, including ones authenticating by header rather than by
+`x-api-key`.
 
-One caveat that is not technical: this is a personal repo for a hobby project. Routing it through an
-employer's inference infrastructure is a question about acceptable use, not about wiring, and the
+`ProxyLLM` is Indeed's gateway, which is **OpenAI-shaped** — `POST /openai/v1/chat/completions`,
+`Authorization: Bearer`, `gpt-4.1-mini` — so it is a separate class rather than a `base_url`. That
+is the case the protocol exists for. Modelled on `hiring-criteria-mock-ux`, including the key
+resolution order: the Vault-rendered properties file first, then `LLM_PROXY_API_KEY`, then
+`VITE_INDEED_LLM_API_KEY`.
+
+It talks stdlib HTTP rather than pulling in `openai` — one POST of JSON to one endpoint, the same
+reasoning that keeps the web server on `http.server`.
+
+To run against it:
+
+```bash
+export LLM_PROXY_API_KEY=...          # never committed; see .gitignore
+```
+
+**Keys.** `api_key` is `repr=False` on both clients, because a dataclass prints every field it has
+and these end up in tracebacks. Gateway errors are swallowed rather than logged, since the response
+body can echo the prompt back.
+
+One caveat that is not technical: this is a personal repo for a hobby project, and the gateway is an
+employer's. Whether that is an acceptable use is a question about policy, not about wiring, and the
 wiring being easy is not an answer to it.
 
 ## Conventions

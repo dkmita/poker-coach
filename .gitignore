@@ -20,3 +20,9 @@ samples/
 # (a PokerCoaching PDF); extracting them for personal study is fine, publishing
 # them in a public repo is redistribution. Regenerate locally from your own copy.
 charts/
+
+# Anything holding a gateway or API key. The clients read these from the
+# environment or from Vault; nothing in the repo should ever contain one.
+.env
+.env.*
+*.properties

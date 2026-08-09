@@ -19,8 +19,12 @@ enforced here only because the check has to happen at the call site.
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 
 # Enough for a weighted range plus whatever thinking precedes it. Ranges are
@@ -133,7 +137,7 @@ class AnthropicLLM:
     # Adaptive rather than a token budget: `budget_tokens` is rejected outright
     # on this model family.
     thinking: bool = True
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     # Point at a gateway that speaks the Anthropic API rather than at Anthropic.
     # Enough for any proxy that is wire-compatible; one that speaks a different
     # shape wants its own class, which is what the protocol is for.
@@ -202,4 +206,130 @@ class AnthropicLLM:
             input_tokens=getattr(usage, "input_tokens", 0),
             output_tokens=getattr(usage, "output_tokens", 0),
             cached=bool(getattr(usage, "cache_read_input_tokens", 0)),
+        )
+
+
+# Indeed's gateway, as used by hiring-criteria-mock-ux. OpenAI-shaped rather
+# than Anthropic-shaped, which is why it is a separate class and not a base_url.
+PROXY_URL = "https://llm-proxy.sandbox.qa.indeed.net"
+PROXY_MODEL = "gpt-4.1-mini"
+# Rendered by Vault Agent when deployed; absent on a laptop, where the env vars
+# take over.
+PROXY_VAULT_PROPS = Path(
+    "/var/local/product_groups/advanced-sourcing/product_group_auto.properties"
+)
+PROXY_VAULT_KEY = "dominik-personal-llm-proxy.api-key"
+
+
+def _vault_props(path: Path | None = None) -> dict[str, str]:
+    """`key=value` lines from the Vault-rendered properties file, if present.
+
+    The path is resolved per call rather than defaulted in the signature: a
+    default argument binds once at import, which would make the location
+    impossible to repoint.
+    """
+    path = path or PROXY_VAULT_PROPS
+    props: dict[str, str] = {}
+    try:
+        text = path.read_text()
+    except OSError:
+        return props
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        props[key.strip()] = value.strip()
+    return props
+
+
+@dataclass
+class ProxyLLM:
+    """An OpenAI-shaped gateway, over stdlib HTTP.
+
+    No SDK. This is one POST of JSON to one endpoint, and the `openai` package
+    would be a second vendor dependency to carry for it -- the same reasoning
+    that keeps the web server on `http.server`.
+
+    Key resolution follows the reference implementation: the Vault-rendered
+    properties file first, then `LLM_PROXY_API_KEY`, then
+    `VITE_INDEED_LLM_API_KEY`. Never logged, never echoed into a `Reply`, and
+    nothing here writes it to disk.
+    """
+
+    model: str = PROXY_MODEL
+    base_url: str | None = None
+    # `repr=False` because a dataclass prints every field it has, and this one
+    # ends up in tracebacks and log lines.
+    api_key: str | None = field(default=None, repr=False)
+    temperature: float = 0.3
+    timeout: float = 60.0
+    # The gateway's own response cache. Off, matching the reference: this layer
+    # already caches on the abstract spot, and a second cache keyed on the exact
+    # prompt would mostly serve entries we would never ask for twice anyway.
+    cache: bool = False
+    name: str = field(init=False, default="indeed-proxy")
+
+    def _key(self) -> str | None:
+        return (
+            self.api_key
+            or _vault_props().get(PROXY_VAULT_KEY)
+            or os.environ.get("LLM_PROXY_API_KEY")
+            or os.environ.get("VITE_INDEED_LLM_API_KEY")
+        )
+
+    def _url(self) -> str:
+        base = self.base_url or os.environ.get("LLM_PROXY_URL") or PROXY_URL
+        return base.rstrip("/") + "/openai/v1/chat/completions"
+
+    def complete(
+        self, *, system: str, prompt: str, max_tokens: int = DEFAULT_MAX_TOKENS
+    ) -> Reply | None:
+        key = self._key()
+        if not key:
+            return None
+        body = json.dumps(
+            {
+                "model": self.model,
+                "messages": [
+                    # System first and per-hand content second, so a provider
+                    # that caches on a prefix can. Same requirement as the
+                    # Anthropic path, expressed by ordering rather than by a
+                    # cache_control block.
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": self.temperature,
+                "max_tokens": max_tokens,
+            }
+        ).encode()
+        request = urllib.request.Request(
+            self._url(),
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {key}",
+                "x-indeed-cache": "true" if self.cache else "false",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                payload = json.loads(response.read())
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            # One failure mode to the caller, as everywhere else on this
+            # boundary: no estimate. The error text can carry the prompt, so it
+            # is deliberately not propagated or logged.
+            return None
+        try:
+            text = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            return None
+        usage = payload.get("usage") or {}
+        details = usage.get("prompt_tokens_details") or {}
+        return Reply(
+            text=text or "",
+            model=payload.get("model", self.model),
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0),
+            cached=bool(details.get("cached_tokens")),
         )
